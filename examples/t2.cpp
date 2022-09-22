@@ -1,8 +1,8 @@
-//                                MFEM Example 0
+//                                MFEM Tutorial 3
 //
-// Compile with: make t2
+// Compile with: make t3
 //
-// Sample runs:  t2
+// Sample runs:  t3
 //
 // Description: This tutorial is about non-conforming meshes and how it affects
 // the system and the solution. We show the difference between conforming and
@@ -57,15 +57,15 @@ int main(int argc, char *argv[])
    x = 0.0;
 
    {
-     Array<int> bdr_marker(mesh.bdr_attributes.Max());
-     bdr_marker = 0;
-     bdr_marker[1] = 1;
+      Array<int> bdr_marker(mesh.bdr_attributes.Max());
+      bdr_marker = 0;
+      bdr_marker[1] = 1;
 
-     ConstantCoefficient one(1.0);
-     x.ProjectBdrCoefficient(one, bdr_marker);
+      ConstantCoefficient one(1.0);
+      x.ProjectBdrCoefficient(one, bdr_marker);
 
-     std::ofstream out("init.gf");
-     x.Save(out);
+      std::ofstream out("init.gf");
+      x.Save(out);
    }
 
    // 6. Set up the linear form b(.) corresponding to the right-hand side. Here

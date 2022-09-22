@@ -1,14 +1,23 @@
-//                                MFEM Tutorial 0
+//                                MFEM Tutorial 1
 //
 // Compile with: make t1
 //
 // Sample runs:  t1
+//               t1 -d 1
+//               t1 -d 2
+//               t1 -d 3
+//               t1 -d 1 -o 2
+//               t1 -d 2 -o 2
+//               t1 -d 3 -o 2
+//               t1 -d 1 -r 1
+//               t1 -d 2 -r 1
+//               t1 -d 3 -r 1
 //
-// Description: In this tutorial, we are attaching a finite element collection
-// to a mesh to enumerate the degrees of freedom (dof) of the domain. We use a
-// GridFunction to evaluate a function at each dof and save the result for
-// visualization. We look at the sparsity pattern of the resulting linear
-// system.
+// Description: In this tutorial, we create a unit mesh and attaching a finite
+// element collection to it and enumerate the degrees of freedom (dof) of the
+// domain. We use a GridFunction to evaluate a function at each dof and save
+// the result for visualization. We look at the sparsity pattern of the
+// resulting linear system.
 
 #include "mfem.hpp"
 #include <fstream>
@@ -19,36 +28,62 @@ using namespace mfem;
 
 double func(const Vector &v)
 {
-  double val = 0.0;
-  if (v.Size() == 1) {
-    val = std::sin(2 * M_PI * v[0]);
-  } else {
-    val = std::sin(2 * M_PI * v[0]) + std::cos(2 * M_PI * v[1]);
-  }
-  return val;
+   double val = 0.0;
+   if (v.Size() == 1)
+   {
+      val = std::sin(2 * M_PI * v[0]);
+   }
+   else if (v.Size() == 2)
+   {
+      val = std::sin(2 * M_PI * v[0]) + std::cos(2 * M_PI * v[1]);
+   }
+   else
+   {
+      val = std::sin(2 * M_PI * v[0]) + std::cos(2 * M_PI * v[1]) +
+            std::sin(2 * M_PI * v[2] + M_PI / 2);
+   }
+   return val;
 }
 
 int main(int argc, char *argv[])
 {
    // 1. Parse command line options.
-   const char *mesh_file = "mesh.mesh";
-   const char *sol_file = "sol.gf";
+   int dim = 2;
    int order = 1;
    int refinements = 0;
 
    OptionsParser args(argc, argv);
-   args.AddOption(&mesh_file, "-m", "--mesh", "Mesh file input.");
-   args.AddOption(&sol_file, "-os", "--output-sol", "Solution file output."); // FIXME: standardize options
+   args.AddOption(&dim, "-d", "--dim", "Mesh dimension (1, 2, or 3)");
    args.AddOption(&order, "-o", "--order", "Finite element polynomial degree");
    args.AddOption(&refinements, "-r", "--refinements", "Mesh refinement steps.");
    args.ParseCheck();
 
-   // 2. Load the mesh, perform refinement and show caracteristics
-   Mesh mesh(mesh_file);
-   for (int i = 0; i < refinements; i++) {
-     mesh.UniformRefinement();
+   // 2. Create the mesh, perform refinement and show caracteristics
+   Mesh mesh;
+   if (dim == 1)
+   {
+      mesh = Mesh::MakeCartesian1D(1);
+   }
+   else if (dim == 2)
+   {
+      mesh = Mesh::MakeCartesian2D(1, 1, Element::QUADRILATERAL);
+   }
+   else if (dim == 3)
+   {
+      mesh = Mesh::MakeCartesian3D(1, 1, 1, Element::HEXAHEDRON);
+   }
+   else
+   {
+      cout << "ERROR: unsupported dimension " << dim << endl;
+      return -1;
+   }
+
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh.UniformRefinement();
    }
    mesh.PrintInfo();
+   mesh.Save("t1.mesh");
 
    // 3. Create finite element space for the mesh. Here we use Lagrange
    // elements with of specified order.
@@ -79,7 +114,7 @@ int main(int argc, char *argv[])
    GridFunction gf(&fespace);
    FunctionCoefficient coef(func);
    gf.ProjectCoefficient(coef);
-   gf.Save(sol_file);
+   gf.Save("t1.gf");
 
    // Here we extract values for each true dofs only. Ee set the true dofs
    // vector to 1 and values at the boundary with 0. Then, we set the grid
@@ -112,10 +147,10 @@ int main(int argc, char *argv[])
    // Now we write this matrix in a file. You can load this file in matlab or
    // octave to see the sparsity pattern. For instance:
    //
-   //   > spy(spconvert(load("system.mat")))
+   //   > spy(spconvert(load("t1.mat")))
    //
    mat.PrintInfo(cout);
-   std::ofstream out("system.mat");
+   std::ofstream out("t1.mat");
    mat.PrintMatlab(out);
 
    return 0;

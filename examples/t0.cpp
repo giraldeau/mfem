@@ -10,8 +10,8 @@
 //               t0 -d 3 -t 1 -r 2 -om mesh-3d-hex-fine.mesh
 //
 // Description: This tutorial explores the creation of basic cartesian meshes.
-// We explore changing the dimensions and the element type. The mesh can be
-// uniformly refined.
+// We observe the effect of the dimensions, the element type and the uniform
+// refinement.
 
 #include "mfem.hpp"
 #include <fstream>
@@ -33,30 +33,43 @@ int main(int argc, char *argv[])
    OptionsParser args(argc, argv);
    args.AddOption(&mesh_file, "-om", "--output-mesh", "Mesh file output.");
    args.AddOption(&dim, "-d", "--dim", "Dimension.");
-   args.AddOption(&etype, "-t", "--element-type", "Element type: 0 - simplex, 1 - quad.");
-   args.AddOption(&subdiv, "-s", "--subdivision", "Number of subdivision in each dimensions.");
-   args.AddOption(&length, "-l", "--length", "Length of the mesh in each dimension.");
-   args.AddOption(&refinements, "-r", "--refinements", "Post-meshing refinement steps.");
+   args.AddOption(&etype, "-t", "--element-type",
+                  "Element type: 0 - simplex, 1 - quad.");
+   args.AddOption(&subdiv, "-s", "--subdivision",
+                  "Number of subdivision in each dimensions.");
+   args.AddOption(&length, "-l", "--length",
+                  "Length of the mesh in each dimension.");
+   args.AddOption(&refinements, "-r", "--refinements",
+                  "Post-meshing refinement steps.");
    args.ParseCheck();
 
    // 2. Generate the mesh according to settings
    Mesh mesh;
-   if (dim == 1) {
+   if (dim == 1)
+   {
       mesh = Mesh::MakeCartesian1D(subdiv, length);
-   } else if (dim == 2) {
-     // FIXME: What does the option generate_edges is doing exactly?
+   }
+   else if (dim == 2)
+   {
+      // FIXME: What does the option generate_edges is doing exactly?
       Element::Type type = (etype == 0) ? Element::TRIANGLE: Element::QUADRILATERAL;
       mesh = Mesh::MakeCartesian2D(subdiv, subdiv, type, false, length, length);
-   } else if (dim == 3) {
-     Element::Type type = (etype == 0) ? Element::TETRAHEDRON: Element::HEXAHEDRON;
-     mesh = Mesh::MakeCartesian3D(subdiv, subdiv, subdiv, type, length, length, length);
-   } else {
-     MFEM_ABORT("invalid dimension");
+   }
+   else if (dim == 3)
+   {
+      Element::Type type = (etype == 0) ? Element::TETRAHEDRON: Element::HEXAHEDRON;
+      mesh = Mesh::MakeCartesian3D(subdiv, subdiv, subdiv, type, length, length,
+                                   length);
+   }
+   else
+   {
+      MFEM_ABORT("invalid dimension");
    }
 
    // 3. Perform uniform refinement
-   for (int i = 0; i < refinements; i++) {
-     mesh.UniformRefinement();
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh.UniformRefinement();
    }
 
    // 4. Show mesh characteristics
