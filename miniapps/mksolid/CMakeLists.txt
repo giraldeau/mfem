@@ -9,9 +9,13 @@
 # terms of the BSD-3 license. We welcome feedback and contributions, see file
 # CONTRIBUTING.md for details.
 
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+
 add_mfem_miniapp(mksolid
     MAIN mksolid.cpp LIBRARIES mfem)
 
 add_mfem_miniapp(scratch
     MAIN scratch.cpp LIBRARIES mfem)
 
+add_mfem_miniapp(impsphere
+    MAIN impsphere.cpp LIBRARIES mfem Eigen3::Eigen)
