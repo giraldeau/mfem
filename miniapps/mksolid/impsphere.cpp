@@ -233,6 +233,91 @@ int main(int argc, char **argv) {
         cout << "Minimum det(J) of the original mesh is " << min_detJ << endl;
     }
 
+    const real_t init_energy = a.GetParGridFunctionEnergy(x);
+    real_t init_metric_energy = init_energy;
+
+    // Note: the surface fit coefficient is part of the function energy. By
+    // setting it to zero, we effectively exclude it. But why do we take it
+    // into account in the first place?
+
+    if (surface_fit_const > 0.0)
+    {
+        surf_fit_coeff.constant   = 0.0;
+        init_metric_energy = a.GetParGridFunctionEnergy(x);
+        surf_fit_coeff.constant  = surface_fit_const;
+    }
+
+    // Fix boundaries
+    Array<int> ess_bdr(pmesh->bdr_attributes.Max());
+    ess_bdr = 1;
+    a.SetEssentialBC(ess_bdr);
+
+    // Use the MINRES + Jacobi
+    MINRESSolver *minres = new MINRESSolver(MPI_COMM_WORLD);
+    minres->SetMaxIter(100);
+    minres->SetRelTol(1e-12);
+    minres->SetAbsTol(0.0);
+    minres->SetPrintLevel(1);
+
+    auto hs = new HypreSmoother;
+    hs->SetType(HypreSmoother::l1Jacobi);
+    hs->SetPositiveDiagonal(true);
+    minres->SetPreconditioner(*hs);
+
+    const IntegrationRule &ir = IntRulesLo.Get(pfespace.GetFE(0)->GetGeomType(), quad_order);
+    TMOPNewtonSolver solver(pfespace.GetComm(), ir, 0); /* 0 = Newton */
+    solver.SetIntegrationRules(IntRulesLo, quad_order);
+    solver.SetPreconditioner(*minres);
+    solver.SetMaxIter(20);
+    solver.SetRelTol(1e-10);
+    solver.SetAbsTol(0.0);
+    solver.SetMinimumDeterminantThreshold(0.001*min_detJ);
+    solver.SetPrintLevel(1);
+    solver.SetOperator(a);
+
+    // Solve it!
+    Vector b(0);
+    solver.Mult(b, x.GetTrueVector());
+    x.SetFromTrueVector();
+
+    // Displacement
+    x0 -= x;
+
+    // Compute the final energy of the functional.
+    const real_t fin_energy = a.GetParGridFunctionEnergy(x);
+    real_t fin_metric_energy = fin_energy;
+    if (surface_fit_const > 0.0)
+    {
+        surf_fit_coeff.constant  = 0.0;
+        fin_metric_energy  = a.GetParGridFunctionEnergy(x);
+        surf_fit_coeff.constant  = surface_fit_const;
+    }
+
+    if (myid == 0)
+    {
+        std::cout << std::scientific << std::setprecision(4);
+        cout << "Initial strain energy: " << init_energy
+             << " = metrics: " << init_metric_energy
+             << " + extra terms: " << init_energy - init_metric_energy << endl;
+        cout << "  Final strain energy: " << fin_energy
+             << " = metrics: " << fin_metric_energy
+             << " + extra terms: " << fin_energy - fin_metric_energy << endl;
+        cout << "The strain energy decreased by: "
+             << (init_energy - fin_energy) * 100.0 / init_energy << " %." << endl;
+
+        // FIXME: this is blocking
+        if (false) {
+            real_t err_avg, err_max;
+            tmop_integ->GetSurfaceFittingErrors(x, err_avg, err_max);
+            if (myid == 0)
+            {
+                std::cout << "Avg fitting error: " << err_avg << std::endl
+                          << "Max fitting error: " << err_max << std::endl;
+            }
+        }
+    }
+
+
     {
         ParaViewDataCollection paraview_dc("LevelSet", pmesh.get());
         paraview_dc.SetPrefixPath("ParaView");
