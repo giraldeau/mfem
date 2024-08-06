@@ -18,4 +18,6 @@ add_mfem_miniapp(scratch
     MAIN scratch.cpp LIBRARIES mfem)
 
 add_mfem_miniapp(impsphere
-    MAIN impsphere.cpp LIBRARIES mfem Eigen3::Eigen)
+    MAIN impsphere.cpp
+    ${MFEM_MINIAPPS_COMMON_HEADERS}
+    LIBRARIES mfem mfem-common Eigen3::Eigen)
