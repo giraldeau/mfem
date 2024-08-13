@@ -3,49 +3,7 @@
 #include <Eigen/Core>
 
 #include "../meshing/mesh-fitting.hpp"
-
-using namespace mfem;
-using namespace std;
-
-class ImpSphereCoeff : public Coefficient {
-public:
-    const Vector m_center;
-    const real_t m_radius;
-
-    ImpSphereCoeff(const Vector &center, const real_t &radius):
-        m_center(center),
-        m_radius(radius) {
-    }
-
-    /// Evaluate the coefficient at @a ip.
-    virtual real_t Eval(ElementTransformation &T,
-                        const IntegrationPoint &ip) {
-
-        real_t x[3];
-        Vector transip(x, 3);
-        T.Transform(ip, transip);
-        MFEM_ASSERT(transip.Size() == 3, "Dim 3 expected")
-
-        real_t thick = m_radius * 0.1;
-        Eigen::Vector3d center(m_center[0], m_center[1], m_center[2]);
-        Eigen::Vector3d point(transip[0], transip[1], transip[2]);
-
-        // Shallow sphere with varying thickness
-        Eigen::Vector3d cp = point - center;
-        double norm = cp.norm();
-        if (norm < 1E-6 * m_radius) {
-            // FIXME: how to properly handle query points close to the center?
-            // The direction of two coincident points is undefined.
-            return abs(norm - m_radius);
-        }
-        Eigen::Vector3d n = cp.normalized();
-        Eigen::Vector3d mid = center + n * (m_radius + thick * 0.5);
-        double res = (point - mid).norm() - thick * 0.5;
-
-        return res;
-    }
-
-};
+#include "spherecoeff.h"
 
 void SetMaterial(Mesh &mesh, GridFunction &mat, const GridFunction &surf_fit_gf0) {
     // Set material gridfunction
@@ -139,17 +97,20 @@ int main(int argc, char **argv) {
     int myid = Mpi::WorldRank();
     Hypre::Init();
 
-    int mesh_poly_deg = 1;
+    int mesh_poly_deg = 3;
     int quad_order = 8;
     real_t surface_fit_const = 100.0;
 
-    ImpSphereCoeff ls_coeff(Vector({0.5, 0.5, 0.5}), 0.45);
+    ImpSphereCoeff ls_coeff(Vector({0.5, 0.5, 0.5}), 0.25, 0.1);
     std::unique_ptr<ParMesh> pmesh;
     {
-        std::unique_ptr<Mesh> mesh(new Mesh(Mesh::MakeCartesian3D(20, 20, 20, Element::HEXAHEDRON, 1.0, 1.0, 1.0)));
+        //std::unique_ptr<Mesh> mesh(new Mesh(Mesh::MakeCartesian3D(20, 20, 20, Element::HEXAHEDRON, 1.0, 1.0, 1.0)));
+        std::unique_ptr<Mesh> mesh(new Mesh(Mesh::MakeCartesian2D(20, 20, Element::TRIANGLE, 1.0, 1.0)));
         mesh->EnsureNCMesh();
         pmesh.reset(new ParMesh(MPI_COMM_WORLD, *mesh));
     }
+
+    const int dim = pmesh->Dimension();
 
     if (true) {
         // Example of refinement
@@ -174,14 +135,22 @@ int main(int argc, char **argv) {
     x0 = x;
 
     // TMOP Metric for 3D mesh
-    TMOP_Metric_303 metric;
+    std::unique_ptr<TMOP_QualityMetric> metric;
+    if (dim == 2) {
+        metric.reset(new TMOP_Metric_058);
+    } else if (dim == 3) {
+        metric.reset(new TMOP_Metric_303);
+    }
+
     TargetConstructor::TargetType target_t = TargetConstructor::IDEAL_SHAPE_UNIT_SIZE;
     TargetConstructor target_c(target_t, MPI_COMM_WORLD);
     target_c.SetNodes(x0);
 
+    IntegrationRules *irules = &IntRulesLo;
+
     // Must be allocated, owned by the NonlinearForm
-    TMOP_Integrator *tmop_integ = new TMOP_Integrator(&metric, &target_c);
-    tmop_integ->SetIntegrationRules(IntRulesLo, quad_order);
+    TMOP_Integrator *tmop_integ = new TMOP_Integrator(metric.get(), &target_c);
+    tmop_integ->SetIntegrationRules(*irules, quad_order);
 
     // Q: what is this doing?
     pmesh->ExchangeFaceNbrData();
@@ -213,6 +182,17 @@ int main(int argc, char **argv) {
     SelectDofsFitting(*pmesh.get(), mat, surf_fit_gf0,
                       surf_fit_mat_gf_interface, surf_fit_marker);
 
+    {
+        ParaViewDataCollection paraview_dc("Debug", pmesh.get());
+        paraview_dc.SetPrefixPath("ParaView");
+        paraview_dc.SetLevelsOfDetail(2);
+        paraview_dc.SetDataFormat(VTKFormat::BINARY);
+        paraview_dc.RegisterField("levelset",&surf_fit_gf0);
+        paraview_dc.RegisterField("material",&surf_fit_mat_gf);
+        paraview_dc.RegisterField("material_interface",&surf_fit_mat_gf_interface);
+        paraview_dc.Save();
+    }
+
     AdvectorCG adapt_surface;
 
     cout << "Setup surface fitting... " << flush;
@@ -228,7 +208,7 @@ int main(int argc, char **argv) {
     ConstantCoefficient *metric_coeff1 = NULL;
     a.AddDomainIntegrator(tmop_integ);
 
-    double min_detJ = ComputeMinDetJ(*pmesh.get(), &pfespace, IntRulesLo, quad_order);
+    double min_detJ = ComputeMinDetJ(*pmesh.get(), &pfespace, *irules, quad_order);
     if (myid == 0) {
         cout << "Minimum det(J) of the original mesh is " << min_detJ << endl;
     }
@@ -259,19 +239,21 @@ int main(int argc, char **argv) {
     minres->SetAbsTol(0.0);
     minres->SetPrintLevel(1);
 
-    auto hs = new HypreSmoother;
-    hs->SetType(HypreSmoother::l1Jacobi);
-    hs->SetPositiveDiagonal(true);
-    minres->SetPreconditioner(*hs);
+    // auto hs = new HypreSmoother;
+    // hs->SetType(HypreSmoother::l1Jacobi);
+    // hs->SetPositiveDiagonal(true);
+    // minres->SetPreconditioner(*hs);
 
-    const IntegrationRule &ir = IntRulesLo.Get(pfespace.GetFE(0)->GetGeomType(), quad_order);
+    // Assume homogenous mesh... but later we supply all integration rules for mixed mesh?
+    Geometry::Type geom_type = pfespace.GetFE(0)->GetGeomType();
+    const IntegrationRule &ir = irules->Get(geom_type, quad_order);
     TMOPNewtonSolver solver(pfespace.GetComm(), ir, 0); /* 0 = Newton */
-    solver.SetIntegrationRules(IntRulesLo, quad_order);
+    solver.SetIntegrationRules(*irules, quad_order);
     solver.SetPreconditioner(*minres);
-    solver.SetMaxIter(20);
-    solver.SetRelTol(1e-10);
+    solver.SetMaxIter(200);
+    solver.SetRelTol(1e-5);
     solver.SetAbsTol(0.0);
-    solver.SetMinimumDeterminantThreshold(0.001*min_detJ);
+    solver.SetMinimumDeterminantThreshold(0.001*min_detJ); // 1.5e-5
     solver.SetPrintLevel(1);
     solver.SetOperator(a);
 
@@ -316,7 +298,6 @@ int main(int argc, char **argv) {
             }
         }
     }
-
 
     {
         ParaViewDataCollection paraview_dc("LevelSet", pmesh.get());

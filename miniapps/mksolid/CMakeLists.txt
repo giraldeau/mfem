@@ -11,13 +11,26 @@
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
+add_library(mksolidlib STATIC
+    spherecoeff.cpp
+    tetgen.cxx
+    predicates.cxx
+)
+target_link_libraries(mksolidlib PUBLIC mfem mfem-common Eigen3::Eigen)
+target_compile_definitions(mksolidlib PUBLIC -DTETLIBRARY -DMC_IMPLEM_ENABLE)
+
 add_mfem_miniapp(mksolid
-    MAIN mksolid.cpp LIBRARIES mfem)
+    MAIN mksolid.cpp LIBRARIES mksolidlib)
 
 add_mfem_miniapp(scratch
-    MAIN scratch.cpp LIBRARIES mfem)
+    MAIN scratch.cpp LIBRARIES mksolidlib)
 
 add_mfem_miniapp(impsphere
     MAIN impsphere.cpp
     ${MFEM_MINIAPPS_COMMON_HEADERS}
-    LIBRARIES mfem mfem-common Eigen3::Eigen)
+    LIBRARIES mksolidlib)
+
+add_mfem_miniapp(mcsphere
+    MAIN mcsphere.cpp
+    ${MFEM_MINIAPPS_COMMON_HEADERS}
+    LIBRARIES mksolidlib)
