@@ -1,36 +1,59 @@
-#define MC_IMPLEM_ENABLE
 #include "MC.h"
 #include "spherecoeff.h"
 #include "tetgen.h"
+#include "mfem.hpp"
 
 #include <fstream>
 #include <iostream>
 
-void CalculateNormal(const MC::mcVec3f &p1, const MC::mcVec3f &p2,
-                     const MC::mcVec3f &p3, MC::mcVec3f &normal) {
-  MC::mcVec3f u = p2 - p1;
-  MC::mcVec3f v = p3 - p1;
+using namespace mfem;
+using namespace MC;
+using namespace std;
+
+void CalculateNormal(const mcVec3f &p1, const mcVec3f &p2,
+                     const mcVec3f &p3, mcVec3f &normal) {
+  mcVec3f u = p2 - p1;
+  mcVec3f v = p3 - p1;
   normal.x = (u.y * v.z) - (u.z * v.y);
   normal.y = (u.z * v.x) - (u.x * v.z);
   normal.z = (u.x * v.y) - (u.y * v.x);
 }
 
-int VectorsDirectionSimilar(const MC::mcVec3f &v1, const MC::mcVec3f &v2) {
-  const MC::mcVec3f n1 = MC::mc_internalNormalize(v1);
-  const MC::mcVec3f n2 = MC::mc_internalNormalize(v2);
+int VectorsDirectionSimilar(const mcVec3f &v1, const mcVec3f &v2) {
+  const mcVec3f n1 = mc_internalNormalize(v1);
+  const mcVec3f n2 = mc_internalNormalize(v2);
   float dot = n1.x * n2.x + n1.y * n2.y + n1.z * n2.z;
   return (dot > 0.9); // close enough
 }
 
-int main() {
+int main(int argc, char **argv) {
 
-  MC::mcMesh mesh;
+  double radius = 0.25;
+  double thick = 0.1;
+  int n = 50;
+  int tetgen = 1;
+  int check_normals = 1;
+
+  OptionsParser args(argc, argv);
+  args.AddOption(&radius, "-r", "--radius", "Sphere radius");
+  args.AddOption(&thick, "-t", "--thickness", "Sphere thickness");
+  args.AddOption(&n, "-n", "--field-resolution", "Field resolution");
+  args.AddOption(&tetgen, "-rtg", "--run-tetgen", "Run tetgen");
+  args.AddOption(&check_normals, "-chkn", "--check-normals", "Check normals");
+
+  args.Parse();
+  if (!args.Good()) {
+    args.PrintUsage(cout);
+    return 1;
+  }
+  args.PrintOptions(cout);
+
+  mcMesh mesh;
 
   {
-    const int n = 50;
     float *field = new float[n * n * n];
 
-    ImpSphereCoeff ls(mfem::Vector({0.5, 0.5, 0.5}), 0.25, 0.1);
+    ImpSphereCoeff ls(mfem::Vector({0.5, 0.5, 0.5}), radius, thick);
     float dx = 1.0 / (n - 1);
 
     for (int i = 0; i < n; i++) {
@@ -43,10 +66,11 @@ int main() {
     }
 
     // Compute isosurface using marching cube
-    MC::marching_cube(field, n, n, n, mesh);
+    marching_cube(field, n, n, n, mesh);
+    delete[] field;
   }
 
-  {
+  if (check_normals) {
     // Check normals
     int n = mesh.indices.size() / 3;
     for (size_t i = 0; i < n; i++) {
@@ -55,10 +79,10 @@ int main() {
       int i1 = mesh.indices[idx + 0];
       int i2 = mesh.indices[idx + 1];
       int i3 = mesh.indices[idx + 2];
-      const MC::mcVec3f &p1 = mesh.vertices[i1];
-      const MC::mcVec3f &p2 = mesh.vertices[i2];
-      const MC::mcVec3f &p3 = mesh.vertices[i3];
-      MC::mcVec3f n1, n2 = {0, 0, 0};
+      const mcVec3f &p1 = mesh.vertices[i1];
+      const mcVec3f &p2 = mesh.vertices[i2];
+      const mcVec3f &p3 = mesh.vertices[i3];
+      mcVec3f n1, n2 = {0, 0, 0};
       CalculateNormal(p1, p2, p3, n1);
 
       n2 += mesh.normals[i1];
@@ -70,17 +94,18 @@ int main() {
 
       int res = VectorsDirectionSimilar(n1, n2);
       if (res == 0) {
-        std::cout << "NORMAL CHECK FAILED: " << i << " " << res << std::endl;
+        cout << "NORMAL CHECK FAILED: " << i << " " << res << endl;
       }
     }
   }
 
   {
     // Export the result as an .obj file
-    std::ofstream out;
-    out.open("test.obj");
-    if (out.is_open() == false)
+    ofstream out;
+    out.open("mcsphere-surface.obj");
+    if (out.is_open() == false) {
       return 1;
+    }
     out << "g Obj\n";
     for (size_t i = 0; i < mesh.vertices.size(); i++) {
       out << "v " << mesh.vertices.at(i).x << " " << mesh.vertices.at(i).y
@@ -99,13 +124,13 @@ int main() {
     out.close();
   }
 
-  {
+  if (tetgen) {
     tetgenio in, out;
 
     in.numberofpoints = mesh.vertices.size();
     REAL *pointlist = new REAL[in.numberofpoints * 3];
     for (int i = 0; i < mesh.vertices.size(); i++) {
-      const MC::mcVec3f &v = mesh.vertices[i];
+      const mcVec3f &v = mesh.vertices[i];
       int idx = i * 3;
       pointlist[idx + 0] = v.x;
       pointlist[idx + 1] = v.y;
@@ -136,25 +161,21 @@ int main() {
 
     tetrahedralize(const_cast<char *>("pV"), &in, &out);
 
-    std::cout << "out numberofpoints :" << out.numberofpoints << "\n";
-    std::cout << "out tets :" << out.numberoftetrahedra << "\n";
-
-    mfem::Mesh mesh(3, out.numberofpoints, out.numberoftetrahedra);
-
-    for (int i = 0; i < out.numberofpoints; i++) {
-      mesh.AddVertex(&out.pointlist[i * 3]);
-    }
-    for (int i = 0; i < out.numberoftetrahedra; i++) {
-      mesh.AddTet(&out.tetrahedronlist[i * 4]);
-    }
-    // mesh.Save("mcsphere.mesh");
+    cout << "tetgen numberofpoints     :" << out.numberofpoints << "\n";
+    cout << "tetgen numberoftetrahedra :" << out.numberoftetrahedra << "\n";
 
     {
-      mfem::ParaViewDataCollection paraview_dc("MCSphere", &mesh);
-      paraview_dc.SetPrefixPath("ParaView");
-      paraview_dc.SetLevelsOfDetail(2);
-      paraview_dc.SetDataFormat(mfem::VTKFormat::BINARY);
-      paraview_dc.Save();
+      // Output tetgen mesh
+      mfem::Mesh mesh(3, out.numberofpoints, out.numberoftetrahedra);
+
+      for (int i = 0; i < out.numberofpoints; i++) {
+        mesh.AddVertex(&out.pointlist[i * 3]);
+      }
+      for (int i = 0; i < out.numberoftetrahedra; i++) {
+        mesh.AddTet(&out.tetrahedronlist[i * 4]);
+      }
+      ofstream ofs("mcsphere.vtk");
+      mesh.PrintVTK(ofs);
     }
   }
 

@@ -5,6 +5,8 @@
 #include "../meshing/mesh-fitting.hpp"
 #include "spherecoeff.h"
 
+using namespace mfem;
+
 void SetMaterial(Mesh &mesh, GridFunction &mat, const GridFunction &surf_fit_gf0) {
     // Set material gridfunction
     for (int i = 0; i < mesh.GetNE(); i++)

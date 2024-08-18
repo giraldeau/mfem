@@ -34,3 +34,13 @@ add_mfem_miniapp(mcsphere
     MAIN mcsphere.cpp
     ${MFEM_MINIAPPS_COMMON_HEADERS}
     LIBRARIES mksolidlib)
+
+add_mfem_miniapp(triwedge
+    MAIN triwedge.cpp
+    ${MFEM_MINIAPPS_COMMON_HEADERS}
+    LIBRARIES mksolidlib)
+
+add_mfem_miniapp(surfmesh
+    MAIN surfmesh.cpp
+    ${MFEM_MINIAPPS_COMMON_HEADERS}
+    LIBRARIES mksolidlib)
