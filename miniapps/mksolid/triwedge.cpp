@@ -4,6 +4,8 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include "surfmeshcompat.h"
+
 using namespace mfem;
 
 int main(int argc, char **argv) {
@@ -11,9 +13,40 @@ int main(int argc, char **argv) {
   Eigen::IOFormat dbgfmt(3, Eigen::DontAlignCols);
 
   // Load triangular surface mesh in 3D
-  Mesh surf(argv[1]);
+  Mesh surf(argv[1], 1, 0);
 
   MFEM_ASSERT(surf.SpaceDimension() != 1, "unsupported for 1D mesh");
+
+  // Compute the gaussian curvature
+  std::vector<double> vcurv(surf.GetNV());
+  {
+    SurfMeshCompat sm;
+    sm.reserve(surf.GetNV(), surf.GetNEdges(), surf.GetNE());
+    for (int i = 0; i < surf.GetNV(); i++) {
+      real_t *t = surf.GetVertex(i);
+      sm.add_vertex(t[0], t[1], t[2]);
+    }
+
+    for (int i = 0; i < surf.GetNE(); i++) {
+      Element *e = surf.GetElement(i);
+      int nv = e->GetNVertices();
+      int *v = e->GetVertices();
+      sm.add_face(v, nv);
+    }
+    std::cout << "computing curvature... " << std::flush;
+    sm.get_curvature(vcurv, SurfMeshCompat::Curvature::gauss, 1, 0, 0);
+    std::cout << "done!" << std::endl;
+  }
+
+  H1_FECollection fec(1, surf.Dimension());
+  FiniteElementSpace fespace(&surf, &fec);
+  GridFunction curv_gf(&fespace);
+  for (int i = 0; i < vcurv.size(); i++) {
+    curv_gf(i) = vcurv[i];
+  }
+  // Nope, that doesn't make sens. Probably someting with the node ordering.
+  curv_gf.Save("curvature.gf");
+  return 0;
 
   // Compute normal at each vertex
   // Compute normal per element, then average in vnorm
@@ -50,8 +83,8 @@ int main(int argc, char **argv) {
   double thick = 1.0;
   for (int i = 0; i < surf.GetNV(); i++) {
     vnorm[i] = vnorm[i].normalized() * thick;
-    std::cout << "norm " << i << " " << vnorm[i].transpose().format(dbgfmt)
-              << "\n";
+    // std::cout << "norm " << i << " " << vnorm[i].transpose().format(dbgfmt)
+              // << "\n";
   }
 
   Eigen::Vector3d up(0, 0, 1);
@@ -92,6 +125,7 @@ int main(int argc, char **argv) {
     // Eigen::Vector3d offset = extrude_vec / nz;
 
     Eigen::Vector3d offset = vnorm[i] / nz;
+    offset = up / nz;
     for (int j = 0; j < nvz; j++) {
       Eigen::Vector3d p1 = p0 + offset * j;
       vol.AddVertex(p1.data());
@@ -143,5 +177,8 @@ int main(int argc, char **argv) {
   vol.Save("triwedge.mesh");
   std::ofstream ofs("triwedge.vtk");
   vol.PrintVTK(ofs);
+
+
+
   return 0;
 }
