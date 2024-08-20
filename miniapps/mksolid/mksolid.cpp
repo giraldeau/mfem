@@ -11,6 +11,8 @@
 using namespace mfem;
 using namespace std;
 
+typedef Eigen::AlignedBox<double, 3> AABB;
+
 // Unused at the moment
 void DiffuseField(GridFunction &field, int smooth_steps)
 {
@@ -33,6 +35,12 @@ void DiffuseField(GridFunction &field, int smooth_steps)
    delete Lap;
 }
 
+void ComputeMeshAABB(const Mesh& mesh, AABB& aabb)
+{
+  for (int i = 0; i < mesh.GetNV(); i++) {
+    aabb.extend(Eigen::Vector3d(mesh.GetVertex(i)));
+  }
+}
 int main(int argc, char *argv[]) {
 
   int refinement = 2;
@@ -59,29 +67,52 @@ int main(int argc, char *argv[]) {
   }
 
   // Compute the AABB for the mesh
-  Eigen::AlignedBox<double, 3> aabb;
-  for (int i = 0; i < surf.GetNV(); i++) {
-    real_t *v = surf.GetVertex(i);
-    aabb.extend(Eigen::Vector3d(v));
-  }
-
-  std::cout << "AABB min:\n" << aabb.min() << "\n";
-  std::cout << "AABB max:\n" << aabb.max() << "\n";
+  AABB surf_aabb;
+  ComputeMeshAABB(surf, surf_aabb);
+  std::cout << "Input mesh AABB min:\n" << surf_aabb.min() << "\n" << surf_aabb.max() << "\n";
 
   // Build the triangle distance index
   tmd::TriangleMeshDistance tmd;
   tmd.construct(surf);
 
   // Create a mesh to evaluate the distance field
+  // FIXME: uniform grid is not scalable. Implement AMR
+  Eigen::Vector3d box = 2.0 * (surf_aabb.sizes() + Eigen::Vector3d(0, 0, 10));
+  Mesh mesh(Mesh::MakeCartesian3D(10, 10, 10, Element::QUADRILATERAL,
+                                  box.x(), box.y(), box.z()));
 
-  Eigen::Vector3d box = aabb.sizes() * 1.2;
-  Mesh mesh(Mesh::MakeCartesian3D(30, 3, 30, Element::QUADRILATERAL,
-                                  box.x(), box.y(), box.z() * 10));
+  {
+    AABB mesh_aabb;
+    ComputeMeshAABB(mesh, mesh_aabb);
+    std::cout << "BEFORE Grid mesh AABB min:\n" << mesh_aabb.min() << "\n" << mesh_aabb.max() << "\n";
+  }
+
+  // Align both meshes
+  {
+    AABB mesh_aabb(Eigen::Vector3d(0, 0, 0), box);
+    Eigen::Vector3d translate = surf_aabb.center() - mesh_aabb.center();
+    std::cout << "mesh translation: " << translate << std::endl;
+    for (int i = 0; i < mesh.GetNV(); i++) {
+      real_t *v = mesh.GetVertex(i);
+      v[0] += translate[0];
+      v[1] += translate[1];
+      v[2] += translate[2];
+    }
+  }
+
+  // Check bounding box
+  {
+    AABB mesh_aabb;
+    ComputeMeshAABB(mesh, mesh_aabb);
+    std::cout << "AFTER Grid mesh AABB min:\n" << mesh_aabb.min() << "\n" << mesh_aabb.max() << "\n";
+  }
 
   int order = 3;
   H1_FECollection fec(order, 3);
-  FiniteElementSpace fespace(&surf, &fec);
+  FiniteElementSpace fespace(&mesh, &fec);
   GridFunction dist(&fespace);
+
+  std::cout << "NDofs: " << fespace.GetNDofs() << std::endl;
 
   FunctionCoefficient tmd_fc([&](const Vector &coord){
     auto res = tmd.signed_distance(coord);
@@ -90,13 +121,23 @@ int main(int argc, char *argv[]) {
 
   dist.ProjectCoefficient(tmd_fc);
 
-  ParaViewDataCollection dc("Solid", &mesh);
-  dc.SetPrefixPath("ParaView");
-  dc.SetLevelsOfDetail(order);
-  dc.SetHighOrderOutput(true);
-  dc.SetDataFormat(VTKFormat::BINARY);
-  dc.RegisterField("distance", &dist);
-  dc.Save();
+  {
+    // Paraview
+    ParaViewDataCollection dc("Solid", &mesh);
+    dc.SetPrefixPath("ParaView");
+    dc.SetLevelsOfDetail(order);
+    dc.SetHighOrderOutput(true);
+    dc.SetDataFormat(VTKFormat::BINARY);
+    dc.RegisterField("distance", &dist);
+    dc.Save();
+  }
+
+
+  {
+    // glvis
+    mesh.Save("mksolid.mesh");
+    dist.Save("mksolid.gf");
+  }
 
   return 0;
 }
