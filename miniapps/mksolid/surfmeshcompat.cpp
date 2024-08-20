@@ -2,6 +2,7 @@
 
 #include <pmp/algorithms/curvature.h>
 #include <pmp/surface_mesh.h>
+#include <pmp/io/io.h>
 
 SurfMeshCompat::SurfMeshCompat() : p_imp(new pmp::SurfaceMesh()) {}
 
@@ -11,20 +12,22 @@ void SurfMeshCompat::reserve(int nv, int nedge, int ne) {
   p_imp->reserve(nv, nedge, ne);
 }
 
-void SurfMeshCompat::add_vertex(double x, double y, double z) {
+int SurfMeshCompat::add_vertex(double x, double y, double z) {
   pmp::Point point;
   point[0] = x;
   point[1] = y;
   point[2] = z;
-  p_imp->add_vertex(point);
+  pmp::Vertex v = p_imp->add_vertex(point);
+  return v.idx();
 }
 
-void SurfMeshCompat::add_face(int *index, int n) {
+int SurfMeshCompat::add_face(int *index, int n) {
   std::vector<pmp::Vertex> vertices(n);
   for (int i = 0; i < n; i++) {
     vertices[i] = pmp::Vertex(index[i]);
   }
-  p_imp->add_face(vertices);
+  pmp::Face f = p_imp->add_face(vertices);
+  return f.idx();
 }
 
 void SurfMeshCompat::get_curvature(std::vector<double> &vec, Curvature c,
@@ -41,3 +44,9 @@ void SurfMeshCompat::get_curvature(std::vector<double> &vec, Curvature c,
     vec[v.idx()] = x;
   }
 }
+
+void SurfMeshCompat::write(const std::string &filename)
+{
+  pmp::write(*p_imp, filename);
+}
+

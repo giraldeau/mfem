@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 
 // pmp-lib is compiled with cpp-11 and mfem is not yet compatible with this
 // standard. This class encapsulate de functionality
@@ -24,10 +25,12 @@ public:
   SurfMeshCompat();
   ~SurfMeshCompat();
   void reserve(int nv, int nedge, int ne);
-  void add_vertex(double x, double y, double z);
-  void add_face(int *index, int n);
+  int add_vertex(double x, double y, double z);
+  int add_face(int *index, int n);
   void get_curvature(std::vector<double> &data, Curvature c, int smoothing_step,
                      bool use_tensor, bool use_two_ring);
+
+  void write(const std::string& filename);
 
 private:
   pmp::SurfaceMesh *p_imp;

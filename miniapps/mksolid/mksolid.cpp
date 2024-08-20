@@ -1,10 +1,17 @@
 #include "mfem.hpp"
-#include <fstream>
 #include <iostream>
+
+#include <Eigen/Geometry>
+#include "tmd/TriangleMeshDistance.h"
+
+/*
+ * Compute the distance field from a surface mesh.
+ */
 
 using namespace mfem;
 using namespace std;
 
+// Unused at the moment
 void DiffuseField(GridFunction &field, int smooth_steps)
 {
    // Setup the Laplacian operator
@@ -27,34 +34,75 @@ void DiffuseField(GridFunction &field, int smooth_steps)
 }
 
 int main(int argc, char *argv[]) {
-  Mesh mesh = Mesh::MakeCartesian2D(100, 100, Element::QUADRILATERAL, 1);
-  mesh.EnsureNCMesh(true);
 
-  int order = 1;
-  int dim = mesh.Dimension();
-  int sdim = mesh.SpaceDimension();
-  H1_FECollection fec(order, dim);
-  FiniteElementSpace fespace(&mesh, &fec);
+  int refinement = 2;
+  std::string outname = "solid";
+  std::string mesh_name;
+  int simplex = 0;
 
-  Vector c1({0.5, 0.5});
-  double r1 = 0.25;
-  FunctionCoefficient coeff2([&](const Vector &p) -> double {
-    const double xc = p(0) - 0.5, yc = p(1) - 0.5;
-    const double r = sqrt(xc*xc + yc*yc);
-    double len = (r >= 0.2 && r <= 0.4) ? -1.0 : 1.0;
-    cout << p(0) << " " << p(1) << " " << len << "\n";
-    return len;
+  OptionsParser args(argc, argv);
+  args.AddOption(&mesh_name, "-m", "--mesh", "Input mesh (surface in 3D)");
+  args.AddOption(&outname, "-o", "--output", "Output file basename");
+
+  args.Parse();
+  if (!args.Good()) {
+    args.PrintUsage(std::cout);
+    return 1;
+  }
+  args.PrintOptions(std::cout);
+
+  Mesh surf(mesh_name);
+
+  // The distance calculation requires triangles
+  if (surf.HasGeometry(Geometry::SQUARE)) {
+    surf = Mesh::MakeSimplicial(surf);
+  }
+
+  // Compute the AABB for the mesh
+  Eigen::AlignedBox<double, 3> aabb;
+  for (int i = 0; i < surf.GetNV(); i++) {
+    real_t *v = surf.GetVertex(i);
+    aabb.extend(Eigen::Vector3d(v));
+  }
+
+  std::cout << "AABB min:\n" << aabb.min() << "\n";
+  std::cout << "AABB max:\n" << aabb.max() << "\n";
+
+  // Build the triangle distance index
+  tmd::TriangleMeshDistance tmd;
+  tmd.construct(surf);
+
+  // Create a mesh to evaluate the distance field
+
+  Eigen::Vector3d box = aabb.sizes() * 1.2;
+  Mesh mesh(Mesh::MakeCartesian3D(30, 3, 30, Element::QUADRILATERAL,
+                                  box.x(), box.y(), box.z() * 10));
+
+  int order = 3;
+  H1_FECollection fec(order, 3);
+  FiniteElementSpace fespace(&surf, &fec);
+  GridFunction dist(&fespace);
+
+  FunctionCoefficient tmd_fc([&](const Vector &coord){
+    auto res = tmd.signed_distance(coord);
+    return res.distance;
   });
-  FunctionCoefficient coeff3([&](const Vector &p) -> double {
-    const double xc = p(0) - 0.5, yc = p(1) - 0.5;
-    const double r = sqrt(xc*xc + yc*yc);
-    return std::tanh(2.0*(r-0.3));
-  });
 
-  GridFunction ls(&fespace);
-  ls.ProjectCoefficient(coeff3);
+  dist.ProjectCoefficient(tmd_fc);
 
-  /*
+  ParaViewDataCollection dc("Solid", &mesh);
+  dc.SetPrefixPath("ParaView");
+  dc.SetLevelsOfDetail(order);
+  dc.SetHighOrderOutput(true);
+  dc.SetDataFormat(VTKFormat::BINARY);
+  dc.RegisterField("distance", &dist);
+  dc.Save();
+
+  return 0;
+}
+
+
+/*
   //DiffuseField(ls, 2);
 
   ConstantCoefficient one(1.0);
@@ -97,14 +145,3 @@ int main(int argc, char *argv[]) {
      it++;
   }
   */
-
-  ParaViewDataCollection dc("MkSolid", &mesh);
-  dc.SetPrefixPath("ParaView");
-  dc.SetLevelsOfDetail(order);
-  dc.SetHighOrderOutput(true);
-  dc.SetDataFormat(VTKFormat::BINARY);
-  dc.RegisterField("ls", &ls);
-  dc.Save();
-
-  return 0;
-}

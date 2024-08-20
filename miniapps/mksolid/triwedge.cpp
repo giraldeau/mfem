@@ -24,7 +24,8 @@ int main(int argc, char **argv) {
     sm.reserve(surf.GetNV(), surf.GetNEdges(), surf.GetNE());
     for (int i = 0; i < surf.GetNV(); i++) {
       real_t *t = surf.GetVertex(i);
-      sm.add_vertex(t[0], t[1], t[2]);
+      int idx = sm.add_vertex(t[0], t[1], t[2]);
+      MFEM_ASSERT(i == idx, "index not equal");
     }
 
     for (int i = 0; i < surf.GetNE(); i++) {
@@ -34,19 +35,20 @@ int main(int argc, char **argv) {
       sm.add_face(v, nv);
     }
     std::cout << "computing curvature... " << std::flush;
-    sm.get_curvature(vcurv, SurfMeshCompat::Curvature::gauss, 1, 0, 0);
+    sm.get_curvature(vcurv, SurfMeshCompat::Curvature::mean, 1, true, true);
     std::cout << "done!" << std::endl;
   }
 
-  H1_FECollection fec(1, surf.Dimension());
-  FiniteElementSpace fespace(&surf, &fec);
-  GridFunction curv_gf(&fespace);
-  for (int i = 0; i < vcurv.size(); i++) {
-    curv_gf(i) = vcurv[i];
+  {
+    H1_FECollection fec(1, surf.Dimension());
+    FiniteElementSpace fespace(&surf, &fec);
+    GridFunction curv_gf(&fespace);
+    for (int i = 0; i < curv_gf.Size(); i++) {
+      real_t *t = surf.GetVertex(i);
+      curv_gf(i) = vcurv[i];
+    }
+    curv_gf.Save("curvature.gf");
   }
-  // Nope, that doesn't make sens. Probably someting with the node ordering.
-  curv_gf.Save("curvature.gf");
-  return 0;
 
   // Compute normal at each vertex
   // Compute normal per element, then average in vnorm
