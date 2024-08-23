@@ -66,6 +66,19 @@ real_t simple_coeff(const Vector &x)
     return x[0] + x[1]*x[1] + x[2]*x[2]*x[2] - 1;
 }
 
+real_t scalar_field(const Vector &x)
+{
+  const int dim = x.Size();
+  if (dim == 2)
+  {
+    return x[0] + x[1]*x[1];
+  }
+  else
+  {
+    return x[0] + x[1]*x[1];
+  }
+}
+
 int main() {
 
     // how to model a simple point in 2D/3D ?
@@ -233,6 +246,131 @@ int main() {
         }
 
         GeometryRefiner refiner;
+
+    }
+
+    {
+      // Compute the gradient of a scalar field
+      // https://github.com/mfem/mfem/issues/865
+      int order = 2;
+      Mesh mesh(Mesh::MakeCartesian3D(10, 10, 10, Element::QUADRILATERAL));
+
+      H1_FECollection h1_fec(order, mesh.Dimension());
+
+      // Using Nedelec element we obtain implicitely a vector solution
+      ND_FECollection nd_fec(order, mesh.Dimension());
+
+      // Q: Can we use H1 elements to compute the gradient using GradientInterpolator?
+      // A: Yes, but I think the vectors have limited continuity accros element boundaries.
+      // We also need to specify vector dim vdim=2 to the FiniteElementSpace
+      // Weird: we have to use at least 2nd order (no matter the order of the
+      // finite element scalar field), otherwise the recovered solution is wrong.
+      //H1_FECollection nd_fec(order, mesh.Dimension());
+
+      // Weird: it looks like the solution obtained with RT element is inverted?!
+      //RT_FECollection nd_fec(order, mesh.Dimension());
+
+      FiniteElementSpace h1_fes(&mesh, &h1_fec);
+      FiniteElementSpace nd_fes(&mesh, &nd_fec);
+
+      FunctionCoefficient ls(scalar_field);
+
+      GridFunction x(&h1_fes); // field
+      GridFunction dx(&nd_fes); // field gradient for DiscreteLinearOperator
+      GridFunction dx2(&nd_fes); // field gradient for GradientGridFunctionCoefficient
+
+      cout << "scalar size: " << x.Size() << endl;
+      cout << "gradient size: " << dx.Size() << endl;
+
+      x.ProjectCoefficient(ls);
+
+      // Method 1: use DiscreteLinearOperator to calculate the gradient
+      DiscreteLinearOperator grad(&h1_fes, &nd_fes);
+      grad.AddDomainInterpolator(new GradientInterpolator);
+      grad.Assemble();
+      grad.Finalize();
+      grad.Mult(x, dx);
+
+      mesh.Save("field.mesh");
+      x.Save("x.gf");
+      dx.Save("dx.gf");
+
+      // Method 2: Project the gradient on another grid
+      GradientGridFunctionCoefficient grad_coeff(&x);
+      dx2.ProjectCoefficient(grad_coeff);
+
+      // Method 3: compute the gradient inside the element using GetGradient().
+      // Q: is this equivalent to do the interpolation of the derivative of the shape function?
+      // A: yes, using CalcDShape(), we get the partial derivatives of each shape function
+      Vector gradient;
+      int elem_id = 64;
+      Element *elem = mesh.GetElement(elem_id);
+      ElementTransformation *T = mesh.GetElementTransformation(elem_id);
+
+      Vector center;
+      //Vector barycenter2;
+      IntegrationPoint barycenter2;
+      // barycentric coordinates to physical center
+      const IntegrationPoint &barycenter = Geometries.GetCenter(elem->GetGeometryType());
+      T->Transform(barycenter, center);
+
+      // TransformBack is not trivial, uses newton iteration with tolerance
+      // But why is this necessary?
+      T->TransformBack(center, barycenter2);
+
+      cout << "Element center barycentric (orig): " << barycenter.x << " "
+           << barycenter.y << " " << barycenter.z << endl;
+      cout << "Element center physical          : " << center[0] << " " << center[1] << " " << center[2] << endl;
+      cout << "Element center barycentric (back): " << barycenter2.x << " "
+           << barycenter2.y << " " << barycenter2.z << endl;
+
+      T->SetIntPoint(&barycenter);
+      x.GetGradient(*T, gradient);
+
+      // Method 4: Compute the gradient manually
+      double eps = 1e-6;
+      Vector p1 = center;
+      Vector p2({center[0]+eps, center[1]});
+      Vector p3({center[0], center[1]+eps});
+      double d1 = scalar_field(p1);
+      double d2 = scalar_field(p2);
+      double d3 = scalar_field(p3);
+
+      double slope_x = (d2 - d1) / eps;
+      double slope_y = (d3 - d1) / eps;
+      Vector manual_gradient({slope_x, slope_y});
+
+      cout << "DiscreteLinearOperator: ";
+      Vector val_grad2;
+      dx.GetVectorValue(elem_id, barycenter, val_grad2);
+      val_grad2.Print();
+
+      cout << "GradientGridFunctionCoefficient: ";
+      Vector val_grad1;
+      dx2.GetVectorValue(elem_id, barycenter, val_grad1);
+      val_grad1.Print();
+
+      cout << "x.GetGradient(): ";
+      gradient.Print();
+
+      cout << "Gradient calculated manually (finite difference): ";
+      manual_gradient.Print();
+
+      {
+        // Q: how to actually output a vector solution?
+        // A: NumperOfComponents is set automatically and we have nothing special to do.
+        //
+        // NOTE: paraview consider the data array as vector ONLY IF there are exactly
+        // 3 components. For 2D data, then we need to use the Calculator filter with
+        // grad_X*iHat+grad_Y*jHat
+        ParaViewDataCollection dc("Gradient3D", &mesh);
+        dc.SetPrefixPath("ParaView");
+        dc.SetDataFormat(VTKFormat::BINARY);
+        dc.RegisterField("x", &x);
+        dc.RegisterField("dx", &dx);
+        dc.RegisterField("dx2", &dx2);
+        dc.Save();
+      }
 
     }
 
