@@ -9,6 +9,8 @@
 # terms of the BSD-3 license. We welcome feedback and contributions, see file
 # CONTRIBUTING.md for details.
 
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+
 set(MESH_FILES
   amr-quad-q2.mesh
   blade.mesh
@@ -120,7 +122,7 @@ if (MFEM_USE_MPI)
   add_mfem_miniapp(pmesh-fitting
     MAIN pmesh-fitting.cpp
     ${MFEM_MINIAPPS_COMMON_HEADERS}
-    LIBRARIES mfem mfem-common)
+    LIBRARIES mfem mfem-common Eigen3::Eigen)
   add_dependencies(pmesh-fitting copy_miniapps_meshing_data)
 
   add_mfem_miniapp(fit-node-position

@@ -227,6 +227,16 @@ int main(int argc, char *argv[])
       visit_dc.Save();
    }
 
+   {
+
+
+     ParaViewDataCollection dc("Ex28", mesh);
+     dc.SetPrefixPath("ParaView");
+     dc.SetDataFormat(VTKFormat::BINARY);
+     dc.RegisterField("displacement", &x);
+     dc.Save();
+   }
+
    // 14. Save the displaced mesh and the inverted solution (which gives the
    //     backward displacements to the original grid). This output can be
    //     viewed later using GLVis: "glvis -m displaced.mesh -g sol.gf".
