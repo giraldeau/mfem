@@ -70,6 +70,7 @@ int main(int argc, char *argv[])
    // 1. Parse command-line options.
    const char *mesh_file = "../../data/star.mesh";
    int order = 1;
+   int nelem = 50000;
    bool static_cond = false;
    bool pa = false;
    const char *device_config = "cpu";
@@ -82,6 +83,8 @@ int main(int argc, char *argv[])
    args.AddOption(&order, "-o", "--order",
                   "Finite element order (polynomial degree) or -1 for"
                   " isoparametric space.");
+   args.AddOption(&nelem, "-n", "--nelem",
+                  "Target number of elements for refinement");
    args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
                   "--no-static-condensation", "Enable static condensation.");
    args.AddOption(&pa, "-pa", "--partial-assembly", "-no-pa",
@@ -111,6 +114,8 @@ int main(int argc, char *argv[])
    mgr.add(cali_config);
    mgr.start();
 
+   MFEM_PERF_BEGIN("Set up the mesh");
+
    // 3. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
    //    the same code.
@@ -123,7 +128,7 @@ int main(int argc, char *argv[])
    //    elements.
    {
       int ref_levels =
-         (int)floor(log(50000./mesh.GetNE())/log(2.)/dim);
+         (int)floor(log(double(nelem)/mesh.GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
          mesh.UniformRefinement();
@@ -166,6 +171,7 @@ int main(int argc, char *argv[])
       ess_bdr = 1;
       fespace.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    }
+   MFEM_PERF_END("Set up the mesh");
 
    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
    //    the FEM linear system, which in this case is (1,phi_i) where phi_i are
@@ -212,7 +218,7 @@ int main(int argc, char *argv[])
 #ifndef MFEM_USE_SUITESPARSE
       // Use a simple symmetric Gauss-Seidel preconditioner with PCG.
       GSSmoother M((SparseMatrix&)(*A));
-      PCG(*A, M, B, X, 1, 200, 1e-12, 0.0);
+      PCG(*A, M, B, X, 0, 200, 1e-12, 1e-6);
 #else
       // If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
       UMFPackSolver umf_solver;

@@ -140,6 +140,12 @@ int main(int argc, char *argv[])
    //    which is a vector of Coefficient objects. The fact that f is non-zero
    //    on boundary attribute 2 is indicated by the use of piece-wise constants
    //    coefficient for its last component.
+
+   // VectorArrayCoefficient: contains forces for each dimension
+   // Each item contains forces for one specific boundary.
+   // The intuitive way to do it would be to set the force vector for the specific boundary.
+   // What if we want to apply a force to a single element? Do we have to create a boundary
+   // attribute for it?
    VectorArrayCoefficient f(dim);
    for (int i = 0; i < dim-1; i++)
    {
