@@ -32,7 +32,11 @@ void InitDisplacement(const Vector &x, Vector &u)
 {
    std::cout << "InitDisplacement: " << (cnt++) << " " << x(0) << " " << x(1) << std::endl;
    u = 0.0;
-   u(0) = 0.2;
+   u(0) = 0.1;
+   // twish sheet
+   if (u.Size() == 3) {
+      u(2) = 0.2 * x(1) - 0.1;
+   }
 }
 
 int main(int argc, char *argv[])
@@ -68,7 +72,18 @@ int main(int argc, char *argv[])
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
    int dim = mesh->Dimension();
    int spaceDim = mesh->SpaceDimension();
+
+   // convert to 3d space
+   if (spaceDim == 2) {
+      mesh->SetCurvature(1, false, 3);
+      ofstream mesh_ofs("initial3d.mesh");
+      mesh_ofs.precision(8);
+      mesh->Print(mesh_ofs);
+      exit(0);
+   }
+
    mesh->EnsureNodes();
+
 
    // 4. Refine the mesh to increase the resolution.
    for (int l = 0; l < refinements; l++)
@@ -81,6 +96,14 @@ int main(int argc, char *argv[])
    std::cout << "NV: " << mesh->GetNV() << std::endl;
    std::cout << "NE: " << mesh->GetNE() << std::endl;
 
+   // FIXME: If we have a 2D surface in 3D space and want to use the ElasticityIntegrator, I think we need
+   // to use FiniteElementCollection of dim (integration on the surface), but a FiniteElementSpace of vdim=3,
+   // because we have 3 degrees of freedom (x, y, z) per node.
+   //
+   // As such, we will need a new integrator for surface meshes in 3D implementing BST for instance.
+   //
+   // The other solution is to create a volume mesh by extrusion and do the calculation in 3D.
+
    // 5. Define a finite element space on the mesh. Here we use vector finite
    //    elements, i.e. dim copies of a scalar finite element space. The vector
    //    dimension is specified by the last argument of the FiniteElementSpace
@@ -91,7 +114,7 @@ int main(int argc, char *argv[])
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
         << endl << "Assembling: " << flush;
 
-   // Show attributes<
+
 #if FALSE
    for (int i = 0; i < mesh->bdr_attributes.Size(); i++) {
       Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
@@ -117,7 +140,7 @@ int main(int argc, char *argv[])
    Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
    ess_bdr = 0;
    ess_bdr[1] = 1;
-   ess_bdr[3] = 1;
+   //ess_bdr[3] = 1;
    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
@@ -125,7 +148,7 @@ int main(int argc, char *argv[])
 
    LinearForm *b = new LinearForm(fespace);
    cout << "r.h.s. ... " << flush;
-   //b->Assemble();
+   b->Assemble();
 
    // 8. Define the solution vector x as a finite element grid function
    //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -134,14 +157,18 @@ int main(int argc, char *argv[])
    x = 0.0;
 
    // Impose the displacement on the boundary 1
-   Vector disp(dim);
+   Vector disp(spaceDim);
    disp = 0.0;
    disp(0) = 0.1;
-   VectorConstantCoefficient init_x(disp);
+   disp(1) = 0.1;
+   disp(2) = 0.1;
+   VectorConstantCoefficient init_xc(disp);
+   VectorFunctionCoefficient init_xf(spaceDim, InitDisplacement);
+
    Array<int> dc_bdr(mesh->bdr_attributes.Max());
    dc_bdr = 0;
    dc_bdr[1] = 1;
-   x.ProjectBdrCoefficient(init_x, dc_bdr);
+   x.ProjectBdrCoefficient(init_xc, dc_bdr);
 
    // FIXME: mesh nodes and the grid functions are incompatible
    // What does SetNodalFESpace exactly? What if we want to keep a linear mesh?
@@ -162,7 +189,6 @@ int main(int argc, char *argv[])
       mesh->Print(mesh_ofs);
       *nodes -= x;
    }
-   exit(0);
 
    // 9. Set up the bilinear form a(.,.) on the finite element space
    //    corresponding to the linear elasticity integrator with piece-wise
@@ -213,6 +239,8 @@ int main(int argc, char *argv[])
 
       ParaViewDataCollection dc("ex2s");
       dc.SetPrefixPath("ParaView");
+      dc.SetHighOrderOutput(true);
+      dc.SetLevelsOfDetail(4);
       dc.SetMesh(mesh);
       dc.RegisterField("x", &x);
       dc.Save();
