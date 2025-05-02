@@ -26,19 +26,6 @@
 using namespace std;
 using namespace mfem;
 
-static int cnt = 0;
-
-void InitDisplacement(const Vector &x, Vector &u)
-{
-   std::cout << "InitDisplacement: " << (cnt++) << " " << x(0) << " " << x(1) << std::endl;
-   u = 0.0;
-   u(0) = 0.1;
-   // twish sheet
-   if (u.Size() == 3) {
-      u(2) = 0.2 * x(1) - 0.1;
-   }
-}
-
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
@@ -114,33 +101,14 @@ int main(int argc, char *argv[])
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
         << endl << "Assembling: " << flush;
 
-
-#if FALSE
-   for (int i = 0; i < mesh->bdr_attributes.Size(); i++) {
-      Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
-      ess_bdr = 0;
-      ess_bdr[i] = 1;
-      fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-
-      std::cout << "Boundary " << i << std::endl;
-      for (int j = 0; j < ess_tdof_list.Size(); ++j) {
-         std::cout << "   TDOF " << i << " " << ess_tdof_list[j] << std::endl;
-         
-      }
-
-   }
-   exit(0);
-#endif
-
-
    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
    //    In this example, the boundary conditions are defined by marking only
    //    boundary attribute 1 from the mesh as essential and converting it to a
    //    list of true dofs.
    Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
    ess_bdr = 0;
-   ess_bdr[1] = 1;
-   //ess_bdr[3] = 1;
+   ess_bdr[0] = 1;
+   ess_bdr[3] = 1;
    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
@@ -160,10 +128,7 @@ int main(int argc, char *argv[])
    Vector disp(spaceDim);
    disp = 0.0;
    disp(0) = 0.1;
-   disp(1) = 0.1;
-   disp(2) = 0.1;
    VectorConstantCoefficient init_xc(disp);
-   VectorFunctionCoefficient init_xf(spaceDim, InitDisplacement);
 
    Array<int> dc_bdr(mesh->bdr_attributes.Max());
    dc_bdr = 0;
