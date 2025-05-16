@@ -24,6 +24,7 @@ list(APPEND ALL_EXE_SRCS
   ex8.cpp
   ex9.cpp
   ex10.cpp
+  ex10-bench.cpp
   ex14.cpp
   ex15.cpp
   ex16.cpp
@@ -49,6 +50,7 @@ list(APPEND ALL_EXE_SRCS
   ex38.cpp
   ex39.cpp
   ex40.cpp
+  contact01.cpp
   )
 
 if (MFEM_USE_MPI)
