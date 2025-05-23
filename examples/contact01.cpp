@@ -44,19 +44,57 @@
 using namespace std;
 using namespace mfem;
 
+class CircleDistance
+{
+public:
+   // Constructor to initialize the circle's center and radius
+   CircleDistance(double centerX, double centerY, double radius)
+      : centerX(centerX), centerY(centerY), radius(radius)
+   {
+   }
+
+   // Method to compute the implicit distance to the circle
+   double computeDistance(double x, double y) const
+   {
+      double dx = x - centerX;
+      double dy = y - centerY;
+      double distanceToCenter = std::sqrt(dx * dx + dy * dy);
+      return distanceToCenter - radius;
+   }
+
+   // Method to compute the direction vector (normalized) at a given location
+   std::pair<double, double> computeDirection(double x, double y) const
+   {
+      double dx = x - centerX;
+      double dy = y - centerY;
+      double magnitude = std::sqrt(dx * dx + dy * dy);
+      if (magnitude == 0)
+      {
+         return {0.0, 0.0}; // Handle the case where the point is exactly at the center
+      }
+      return {dx / magnitude, dy / magnitude};
+   }
+
+private:
+   double centerX;
+   double centerY;
+   double radius;
+};
+
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/beam-tri.mesh";
    int order = 1;
    bool static_cond = false;
    bool visualization = 1;
+   real_t lambda = 1.0;
+   real_t mu = 1.0;
 
    OptionsParser args(argc, argv);
-   args.AddOption(&mesh_file, "-m", "--mesh",
-                  "Mesh file to use.");
    args.AddOption(&order, "-o", "--order",
                   "Finite element order (polynomial degree).");
+   args.AddOption(&lambda, "-l", "--lambda","Lambda parameter");
+   args.AddOption(&mu, "-m", "--mu", "Mu parameter");
    args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
                   "--no-static-condensation", "Enable static condensation.");
    args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
@@ -69,127 +107,45 @@ int main(int argc, char *argv[])
       return 1;
    }
    args.PrintOptions(cout);
-
-   // 2. Read the mesh from the given mesh file. We can handle triangular,
-   //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-   Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   Mesh *mesh = new Mesh(Mesh::MakeCartesian2D(10, 10, Element::TRIANGLE, false, 10.0, 5.0));
    int dim = mesh->Dimension();
 
-   if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
-   {
-      cerr << "\nInput mesh should have at least two materials and "
-           << "two boundary attributes! (See schematic in ex2.cpp)\n"
-           << endl;
-      return 3;
-   }
-
-   // 3. Select the order of the finite element discretization space. For NURBS
-   //    meshes, we increase the order by degree elevation.
-   if (mesh->NURBSext)
-   {
-      mesh->DegreeElevate(order, order);
-   }
-
-   // 4. Refine the mesh to increase the resolution. In this example we do
-   //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-   //    largest number that gives a final mesh with no more than 5,000
-   //    elements.
-   {
-      int ref_levels =
-         (int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
-      for (int l = 0; l < ref_levels; l++)
-      {
-         mesh->UniformRefinement();
-      }
-   }
-
-   // 5. Define a finite element space on the mesh. Here we use vector finite
-   //    elements, i.e. dim copies of a scalar finite element space. The vector
-   //    dimension is specified by the last argument of the FiniteElementSpace
-   //    constructor. For NURBS meshes, we use the (degree elevated) NURBS space
-   //    associated with the mesh nodes.
-   FiniteElementCollection *fec;
-   FiniteElementSpace *fespace;
-   if (mesh->NURBSext)
-   {
-      fec = NULL;
-      fespace = mesh->GetNodes()->FESpace();
-   }
-   else
-   {
-      fec = new H1_FECollection(order, dim);
-      fespace = new FiniteElementSpace(mesh, fec, dim);
-   }
+   FiniteElementCollection *fec = new H1_FECollection(order, dim);
+   FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec, dim);
+   mesh->EnsureNodes(); // make sure the node array exists
+   mesh->SetNodalFESpace(fespace); // required to move the nodes
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
-        << endl << "Assembling: " << flush;
+        << endl << "Assembling: " << std::endl;
 
-   // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-   //    In this example, the boundary conditions are defined by marking only
-   //    boundary attribute 1 from the mesh as essential and converting it to a
-   //    list of true dofs.
-   Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
+   // BC
+   Array<int> ess_bdr(mesh->bdr_attributes.Max());
    ess_bdr = 0;
    ess_bdr[0] = 1;
+   std::cout << "Essential Boundaries: ";
+   ess_bdr.Print();
+   std::cout << std::endl;
+
+   Array<int> ess_tdof_list;
    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
-   // 7. Set up the linear form b(.) which corresponds to the right-hand side of
-   //    the FEM linear system. In this case, b_i equals the boundary integral
-   //    of f*phi_i where f represents a "pull down" force on the Neumann part
-   //    of the boundary and phi_i are the basis functions in the finite element
-   //    fespace. The force is defined by the VectorArrayCoefficient object f,
-   //    which is a vector of Coefficient objects. The fact that f is non-zero
-   //    on boundary attribute 2 is indicated by the use of piece-wise constants
-   //    coefficient for its last component.
+   std::cout << "Essential TDof: " << std::endl;
+   ess_tdof_list.Print();
 
-   // VectorArrayCoefficient: contains forces for each dimension
-   // Each item contains forces for one specific boundary.
-   // The intuitive way to do it would be to set the force vector for the specific boundary.
-   // What if we want to apply a force to a single element? Do we have to create a boundary
-   // attribute for it?
-   VectorArrayCoefficient f(dim);
-   for (int i = 0; i < dim-1; i++)
-   {
-      f.Set(i, new ConstantCoefficient(0.0));
-   }
-   {
-      Vector pull_force(mesh->bdr_attributes.Max());
-      pull_force = 0.0;
-      pull_force(1) = -1.0e-2;
-      f.Set(dim-1, new PWConstCoefficient(pull_force));
-   }
-
+   // There is no forces on the RHS
    LinearForm *b = new LinearForm(fespace);
-   b->AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(f));
-   cout << "r.h.s. ... " << flush;
+   cout << "r.h.s. ... " << std::endl;
    b->Assemble();
 
-   // 8. Define the solution vector x as a finite element grid function
-   //    corresponding to fespace. Initialize x with initial guess of zero,
-   //    which satisfies the boundary conditions.
    GridFunction x(fespace);
    x = 0.0;
 
-   // 9. Set up the bilinear form a(.,.) on the finite element space
-   //    corresponding to the linear elasticity integrator with piece-wise
-   //    constants coefficient lambda and mu.
-   Vector lambda(mesh->attributes.Max());
-   lambda = 1.0;
-   lambda(0) = lambda(1)*50;
-   PWConstCoefficient lambda_func(lambda);
-   Vector mu(mesh->attributes.Max());
-   mu = 1.0;
-   mu(0) = mu(1)*50;
-   PWConstCoefficient mu_func(mu);
+   ConstantCoefficient lambda_func(lambda);
+   ConstantCoefficient mu_func(mu);
 
    BilinearForm *a = new BilinearForm(fespace);
    a->AddDomainIntegrator(new ElasticityIntegrator(lambda_func,mu_func));
 
-   // 10. Assemble the bilinear form and the corresponding linear system,
-   //     applying any necessary transformations such as: eliminating boundary
-   //     conditions, applying conforming constraints for non-conforming AMR,
-   //     static condensation, etc.
-   cout << "matrix ... " << flush;
-   if (static_cond) { a->EnableStaticCondensation(); }
+   cout << "matrix ... " << std::endl;
    a->Assemble();
 
    SparseMatrix A;
@@ -214,18 +170,6 @@ int main(int argc, char *argv[])
 
    // 12. Recover the solution as a finite element grid function.
    a->RecoverFEMSolution(X, *b, x);
-
-   // 13. For non-NURBS meshes, make the mesh curved based on the finite element
-   //     space. This means that we define the mesh elements through a fespace
-   //     based transformation of the reference element. This allows us to save
-   //     the displaced mesh as a curved mesh when using high-order finite
-   //     element displacement field. We assume that the initial mesh (read from
-   //     the file) is not higher order curved mesh compared to the chosen FE
-   //     space.
-   if (!mesh->NURBSext)
-   {
-      mesh->SetNodalFESpace(fespace);
-   }
 
    // 14. Save the displaced mesh and the inverted solution (which gives the
    //     backward displacements to the original grid). This output can be
