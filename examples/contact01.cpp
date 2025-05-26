@@ -47,39 +47,60 @@ using namespace mfem;
 class CircleDistance
 {
 public:
-   // Constructor to initialize the circle's center and radius
-   CircleDistance(double centerX, double centerY, double radius)
+   CircleDistance(real_t centerX, real_t centerY, real_t radius)
       : centerX(centerX), centerY(centerY), radius(radius)
    {
    }
 
    // Method to compute the implicit distance to the circle
-   double computeDistance(double x, double y) const
+   real_t operator()(const Vector& x) const
    {
-      double dx = x - centerX;
-      double dy = y - centerY;
-      double distanceToCenter = std::sqrt(dx * dx + dy * dy);
-      return distanceToCenter - radius;
+      double dx = x(0) - centerX;
+      double dy = x(1) - centerY;
+      double d = std::sqrt(dx * dx + dy * dy);
+      return d - radius;
    }
 
    // Method to compute the direction vector (normalized) at a given location
-   std::pair<double, double> computeDirection(double x, double y) const
+   void operator()(const Vector &x, Vector &dir) const
    {
-      double dx = x - centerX;
-      double dy = y - centerY;
-      double magnitude = std::sqrt(dx * dx + dy * dy);
-      if (magnitude == 0)
+      real_t dx = x(0) - centerX;
+      real_t dy = x(1) - centerY;
+      real_t magnitude = std::sqrt(dx * dx + dy * dy);
+      if (magnitude > 1e-9)
       {
-         return {0.0, 0.0}; // Handle the case where the point is exactly at the center
+         dir(0) = -dx / magnitude;
+         dir(1) = -dy / magnitude;
       }
-      return {dx / magnitude, dy / magnitude};
    }
 
 private:
-   double centerX;
-   double centerY;
-   double radius;
+   real_t centerX;
+   real_t centerY;
+   real_t radius;
 };
+
+SparseMatrix* BuildContactMatrix(FiniteElementSpace& fespace, CircleDistance &dist)
+{
+   int dim = fespace.GetVDim();
+
+   // Count the number of contact constraints
+   int n_rows = 0;
+   for (int i = 0; i < fespace.GetNBE(); ++i)
+   {
+      Array<int> dofs;
+      fespace.GetBdrElementDofs(i, dofs);
+      std::cout << i << " ";
+      dofs.Print();
+      std::cout << std::endl;
+   }
+
+
+   SparseMatrix * mout = new SparseMatrix(n_rows, fespace.GetTrueVSize());
+   mout->Finalize();
+
+   return mout;
+}
 
 int main(int argc, char *argv[])
 {
@@ -112,6 +133,7 @@ int main(int argc, char *argv[])
 
    FiniteElementCollection *fec = new H1_FECollection(order, dim);
    FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec, dim);
+   FiniteElementSpace *fespace_ls = new FiniteElementSpace(mesh, fec);
    mesh->EnsureNodes(); // make sure the node array exists
    mesh->SetNodalFESpace(fespace); // required to move the nodes
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
@@ -155,6 +177,31 @@ int main(int argc, char *argv[])
 
    cout << "Size of linear system: " << A.Height() << endl;
 
+
+   ParaViewDataCollection dc("Contact01");
+   dc.SetPrefixPath("ParaView");
+   dc.SetMesh(mesh);
+
+   /*
+    * Contact
+    */
+   CircleDistance circle(5, 8, 4);
+   FunctionCoefficient ls_coefficient(circle);
+   VectorFunctionCoefficient lsv_coefficient(dim, circle);
+
+   GridFunction x_ls(fespace_ls);
+   x_ls.ProjectCoefficient(ls_coefficient);
+
+   GridFunction x_dir(fespace);
+   x_dir.ProjectCoefficient(lsv_coefficient);
+
+   dc.RegisterField("ls", &x_ls);
+   dc.RegisterField("dir", &x_dir);
+   dc.Save();
+
+   //SparseMatrix *C = BuildContactMatrix(*fespace);
+   exit(0);
+
 #ifndef MFEM_USE_SUITESPARSE
    // 11. Define a simple symmetric Gauss-Seidel preconditioner and use it to
    //     solve the system Ax=b with PCG.
@@ -171,31 +218,6 @@ int main(int argc, char *argv[])
    // 12. Recover the solution as a finite element grid function.
    a->RecoverFEMSolution(X, *b, x);
 
-   // 14. Save the displaced mesh and the inverted solution (which gives the
-   //     backward displacements to the original grid). This output can be
-   //     viewed later using GLVis: "glvis -m displaced.mesh -g sol.gf".
-   {
-      GridFunction *nodes = mesh->GetNodes();
-      *nodes += x;
-      x *= -1;
-      ofstream mesh_ofs("displaced.mesh");
-      mesh_ofs.precision(8);
-      mesh->Print(mesh_ofs);
-      ofstream sol_ofs("sol.gf");
-      sol_ofs.precision(8);
-      x.Save(sol_ofs);
-   }
-
-   // 15. Send the above data by socket to a GLVis server. Use the "n" and "b"
-   //     keys in GLVis to visualize the displacements.
-   if (visualization)
-   {
-      char vishost[] = "localhost";
-      int  visport   = 19916;
-      socketstream sol_sock(vishost, visport);
-      sol_sock.precision(8);
-      sol_sock << "solution\n" << *mesh << x << flush;
-   }
 
    // 16. Free the used memory.
    delete a;
