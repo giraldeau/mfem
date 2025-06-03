@@ -40,6 +40,7 @@
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
+#include <unordered_set>
 
 using namespace std;
 using namespace mfem;
@@ -61,16 +62,18 @@ public:
       return d - radius;
    }
 
-   // Method to compute the direction vector (normalized) at a given location
+   // Method to compute the direction vector at a given location
    void operator()(const Vector &x, Vector &dir) const
    {
-      real_t dx = x(0) - centerX;
-      real_t dy = x(1) - centerY;
-      real_t magnitude = std::sqrt(dx * dx + dy * dy);
-      if (magnitude > 1e-9)
+      double dx = x(0) - centerX;
+      double dy = x(1) - centerY;
+      double d = std::sqrt(dx * dx + dy * dy);
+      // what to use for undefined direction?
+      dir = 0.0;
+      if (d > 1e-12)
       {
-         dir(0) = -dx / magnitude;
-         dir(1) = -dy / magnitude;
+         dir(0) = -1.0 * dx / d;
+         dir(1) = -1.0 * dy / d;
       }
    }
 
@@ -80,26 +83,109 @@ private:
    real_t radius;
 };
 
-SparseMatrix* BuildContactMatrix(FiniteElementSpace& fespace, CircleDistance &dist)
+struct ContactData {
+   SparseMatrix *C;
+   Vector *gap;
+};
+
+void BuildContactMatrix(struct ContactData& state, FiniteElementSpace& fespace, FunctionCoefficient &dist, VectorFunctionCoefficient &dir)
 {
    int dim = fespace.GetVDim();
 
    // Count the number of contact constraints
-   int n_rows = 0;
+   // The constraint is active if the level-set distance is negative
+   std::unordered_map<int, int> row_map;
+   std::vector<int> row_dofs;
    for (int i = 0; i < fespace.GetNBE(); ++i)
    {
-      Array<int> dofs;
-      fespace.GetBdrElementDofs(i, dofs);
-      std::cout << i << " ";
-      dofs.Print();
-      std::cout << std::endl;
+      int attr = fespace.GetBdrAttribute(i);
+
+      // FIXME: restrict to attribute 3 (top edge)
+      if (attr == 3)
+      {
+         Array<int> dofs;
+         Array<int> vdofs;
+         fespace.GetBdrElementDofs(i, dofs);
+
+         ElementTransformation *Tr = fespace.GetBdrElementTransformation(i);
+         const FiniteElement *fe = fespace.GetBE(i);
+         const IntegrationRule& nodes = fe->GetNodes();
+         // FIXME: difference between integration point and the DOF
+         // I think here IntegrationRule is used by convenience, because in
+         // general nodes and quadrature points are not related.
+         for (int j = 0; j < dofs.Size(); ++j)
+         {
+            const IntegrationPoint &ip = nodes.IntPoint(j);
+            real_t d = dist.Eval(*Tr, ip);
+            bool sign = (d < 0);
+            if (d < 0)
+            {
+               const auto &iter = row_map.find(dofs[j]);
+               if (iter == row_map.end())
+               {
+                  row_map[dofs[j]] = row_dofs.size();
+                  row_dofs.push_back(dofs[j]);
+                  std::cout << "dof: " << dofs[j] << " " << d << std::endl;
+               }
+            }
+         }
+      }
    }
 
+   // Display the DOFs in order
+   std::cout << "n_rows: " << row_dofs.size() << std::endl;
+   for (const auto& dof : row_dofs)
+   {
+      const auto &row = row_map[dof];
+      std::cout << row << " " << dof << std::endl;
+   }
 
-   SparseMatrix * mout = new SparseMatrix(n_rows, fespace.GetTrueVSize());
-   mout->Finalize();
+   // Compute the actual constraint matrix and RHS
+   state.C = new SparseMatrix(row_dofs.size(), fespace.GetTrueVSize());
+   state.gap = new Vector(row_dofs.size());
+   *state.gap = 0.0;
+   for (int i = 0; i < fespace.GetNBE(); ++i)
+   {
+      int attr = fespace.GetBdrAttribute(i);
+      if (attr == 3)
+      {
+         ElementTransformation *Tr = fespace.GetBdrElementTransformation(i);
+         const FiniteElement *fe = fespace.GetBE(i);
+         const IntegrationRule& nodes = fe->GetNodes();
 
-   return mout;
+         Array<int> dofs;
+         fespace.GetBdrElementDofs(i, dofs);
+         for (int j = 0; j < dofs.Size(); ++j)
+         {
+            // DOF is the node number, but there are 2 dof per node here
+            // With Ordering::byNODES, the VDofs of a node are not consecutive
+            int node = dofs[j];
+
+
+            const IntegrationPoint &ip = nodes.IntPoint(j);
+            Tr->SetIntPoint(&ip);
+            real_t val = dist.Eval(*Tr, ip);
+            if (val < 0)
+            {
+               Vector nor(3);
+               dir.Eval(nor, *Tr, ip);
+
+               int row = row_map.at(node);
+               (*state.gap)[row] += val;
+               std::cout << "row " << row << " " << val << " norm: " << nor[0] << "," << nor[1] << std::endl;
+
+               for (int d = 0; d < dim; ++d)
+               {
+                  int vdof = fespace.DofToVDof(node, d);
+                  std::cout << "   " << node << " " << d << " " << vdof << std::endl;
+                  state.C->Add(row, vdof, nor[d] + 1e-12);
+               }
+            }
+         }
+      }
+   }
+
+   state.C->Finalize();
 }
 
 int main(int argc, char *argv[])
@@ -138,6 +224,10 @@ int main(int argc, char *argv[])
    mesh->SetNodalFESpace(fespace); // required to move the nodes
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
         << endl << "Assembling: " << std::endl;
+   {
+      std::ofstream ofs("contact.mesh");
+      mesh->Print(ofs);
+   }
 
    // BC
    Array<int> ess_bdr(mesh->bdr_attributes.Max());
@@ -177,9 +267,10 @@ int main(int argc, char *argv[])
 
    cout << "Size of linear system: " << A.Height() << endl;
 
-
    ParaViewDataCollection dc("Contact01");
    dc.SetPrefixPath("ParaView");
+   dc.SetHighOrderOutput(false);
+   dc.SetLevelsOfDetail(0);
    dc.SetMesh(mesh);
 
    /*
@@ -199,25 +290,35 @@ int main(int argc, char *argv[])
    dc.RegisterField("dir", &x_dir);
    dc.Save();
 
-   //SparseMatrix *C = BuildContactMatrix(*fespace);
-   exit(0);
-
-#ifndef MFEM_USE_SUITESPARSE
-   // 11. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-   //     solve the system Ax=b with PCG.
+   struct ContactData state{};
+   BuildContactMatrix(state, *fespace, ls_coefficient, lsv_coefficient);
+   {
+      std::ofstream mat("C.mat");
+      state.C->PrintMatlab(mat);
+      std::ofstream gap("gap.mat");
+      state.gap->Print(gap);
+   }
    GSSmoother M(A);
-   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
-#else
-   // 11. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-   UMFPackSolver umf_solver;
-   umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-   umf_solver.SetOperator(A);
-   umf_solver.Mult(B, X);
-#endif
+   SchurConstrainedSolver * solver = new SchurConstrainedSolver(A, *state.C, M);
+   solver->SetConstraintRHS(*state.gap);
+   solver->SetRelTol(1e-5);
+   solver->SetMaxIter(2000);
+   solver->SetPrintLevel(1);
+   solver->Mult(B, X);
 
-   // 12. Recover the solution as a finite element grid function.
+   Vector lm;
+   solver->GetMultiplierSolution(lm);
+   lm.Print();
+
    a->RecoverFEMSolution(X, *b, x);
+   GridFunction *nodes = mesh->GetNodes();
+   *nodes += x;
 
+   {
+      ofstream mesh_ofs("displaced.mesh");
+      mesh_ofs.precision(8);
+      mesh->Print(mesh_ofs);
+   }
 
    // 16. Free the used memory.
    delete a;
@@ -228,6 +329,7 @@ int main(int argc, char *argv[])
       delete fec;
    }
    delete mesh;
+   delete solver;
 
    return 0;
 }
