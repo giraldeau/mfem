@@ -178,7 +178,7 @@ void BuildContactMatrix(struct ContactData& state, FiniteElementSpace& fespace, 
                {
                   int vdof = fespace.DofToVDof(node, d);
                   std::cout << "   " << node << " " << d << " " << vdof << std::endl;
-                  state.C->Add(row, vdof, nor[d] + 1e-12);
+                  state.C->Add(row, vdof, nor[d]);
                }
             }
          }
@@ -196,6 +196,7 @@ int main(int argc, char *argv[])
    bool visualization = 1;
    real_t lambda = 1.0;
    real_t mu = 1.0;
+   int refinements = 0;
 
    OptionsParser args(argc, argv);
    args.AddOption(&order, "-o", "--order",
@@ -207,6 +208,7 @@ int main(int argc, char *argv[])
    args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
                   "--no-visualization",
                   "Enable or disable GLVis visualization.");
+   args.AddOption(&refinements, "-r", "--refinements", "Number of refinement levels");
    args.Parse();
    if (!args.Good())
    {
@@ -216,6 +218,9 @@ int main(int argc, char *argv[])
    args.PrintOptions(cout);
    Mesh *mesh = new Mesh(Mesh::MakeCartesian2D(10, 10, Element::TRIANGLE, false, 10.0, 5.0));
    int dim = mesh->Dimension();
+   for (int r = 0; r < refinements; ++r) {
+      mesh->UniformRefinement();
+   }
 
    FiniteElementCollection *fec = new H1_FECollection(order, dim);
    FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec, dim);
@@ -276,7 +281,8 @@ int main(int argc, char *argv[])
    /*
     * Contact
     */
-   CircleDistance circle(5, 8, 4);
+   real_t dy = 2.0;
+   CircleDistance circle(5, 9 - dy, 4);
    FunctionCoefficient ls_coefficient(circle);
    VectorFunctionCoefficient lsv_coefficient(dim, circle);
 
@@ -285,10 +291,6 @@ int main(int argc, char *argv[])
 
    GridFunction x_dir(fespace);
    x_dir.ProjectCoefficient(lsv_coefficient);
-
-   dc.RegisterField("ls", &x_ls);
-   dc.RegisterField("dir", &x_dir);
-   dc.Save();
 
    struct ContactData state{};
    BuildContactMatrix(state, *fespace, ls_coefficient, lsv_coefficient);
@@ -313,11 +315,20 @@ int main(int argc, char *argv[])
    a->RecoverFEMSolution(X, *b, x);
    GridFunction *nodes = mesh->GetNodes();
    *nodes += x;
+   fespace_ls->Update();
 
    {
       ofstream mesh_ofs("displaced.mesh");
       mesh_ofs.precision(8);
       mesh->Print(mesh_ofs);
+
+      ofstream sol_ofs("sol.mesh");
+      GridFunction x_ls_end(fespace_ls);
+      x_ls_end.ProjectCoefficient(ls_coefficient);
+      x_ls_end.Save(sol_ofs);
+
+      dc.RegisterField("x_ls_end", &x_ls_end);
+      dc.Save();
    }
 
    // 16. Free the used memory.
