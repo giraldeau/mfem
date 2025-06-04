@@ -51,6 +51,8 @@ list(APPEND ALL_EXE_SRCS
   ex39.cpp
   ex40.cpp
   contact01.cpp
+  contact02.cpp
+  contact03.cpp
   )
 
 if (MFEM_USE_MPI)
