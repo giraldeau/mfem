@@ -13,15 +13,22 @@ using namespace std;
 
 typedef Eigen::AlignedBox<double, 3> AABB;
 
+void ComputeMeshAABB(const Mesh &mesh, AABB &aabb) {
+    for (int i = 0; i < mesh.GetNV(); i++) {
+        aabb.extend(Eigen::Vector3d(mesh.GetVertex(i)));
+    }
+}
+
 int main(int argc, char *argv[]) {
 
-  int refinement = 2;
+  int refinement = 0;
   std::string outname = "solid";
   std::string mesh_name;
   int simplex = 0;
 
   OptionsParser args(argc, argv);
   args.AddOption(&mesh_name, "-m", "--mesh", "Input mesh (surface in 3D)");
+  args.AddOption(&refinement, "-r", "--refinements", "Number of uniform refinements");
   args.AddOption(&outname, "-o", "--output", "Output file basename");
 
   args.Parse();
@@ -32,6 +39,12 @@ int main(int argc, char *argv[]) {
   args.PrintOptions(std::cout);
 
   Mesh surf(mesh_name);
+
+  if (refinement > 0) {
+    for (int i = 0; i < refinement; i++) {
+      surf.UniformRefinement();
+    }
+  }
 
   // The distance calculation requires triangles
   if (surf.HasGeometry(Geometry::SQUARE)) {
@@ -51,8 +64,8 @@ int main(int argc, char *argv[]) {
 
   // Create a mesh to evaluate the distance field
   // FIXME: uniform grid is not scalable. Implement AMR
-  Eigen::Vector3d box = 3.0 * surf_aabb.sizes();
-  Mesh mesh(Mesh::MakeCartesian3D(100, 5, 50, Element::QUADRILATERAL, box.x(),
+  Eigen::Vector3d box = 2.0 * surf_aabb.sizes();
+  Mesh mesh(Mesh::MakeCartesian3D(20, 20, 20, Element::QUADRILATERAL, box.x(),
                                   box.y(), box.z()));
 
   // Align both meshes
@@ -79,11 +92,18 @@ int main(int argc, char *argv[]) {
 
   std::cout << "NDofs: " << h1_fespace.GetNDofs() << std::endl;
 
+  double thick = 0.5;
+  double half_thick = thick * 0.5;
   FunctionCoefficient tmd_fc([&](const Vector &coord) {
     // FIXME: use the feature and barycentric coordinate to determine the actual
     // thickness
     auto res = tmd.signed_distance(coord);
-    return res.distance;
+
+    // simple distance to level-set
+    //return res.distance;
+
+    // constant mid-plane thickness
+    return std::abs(res.distance) - half_thick;
   });
 
   dist.ProjectCoefficient(tmd_fc);
@@ -94,7 +114,8 @@ int main(int argc, char *argv[]) {
 
   {
     // Paraview
-    surf.Save("surf.vtk");
+    std::ofstream out("surf.vtk");
+    surf.PrintVTK(out);
 
     ParaViewDataCollection dc("Solid", &mesh);
     dc.SetPrefixPath("ParaView");

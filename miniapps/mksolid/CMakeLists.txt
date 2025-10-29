@@ -10,12 +10,7 @@
 # CONTRIBUTING.md for details.
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-find_package(pmp 3.0.0 REQUIRED)
 find_package(OpenMP)
-
-add_library(pmplib surfmeshcompat.cpp)
-target_link_libraries(pmplib PRIVATE Eigen3::Eigen pmp)
-target_compile_features(pmplib PRIVATE cxx_std_20)
 
 add_library(mksolidlib STATIC
     spherecoeff.cpp
@@ -27,24 +22,6 @@ target_compile_definitions(mksolidlib PUBLIC -DTETLIBRARY -DMC_IMPLEM_ENABLE)
 
 add_mfem_miniapp(mksolid
     MAIN mksolid.cpp LIBRARIES mksolidlib)
-
-add_mfem_miniapp(scratch
-    MAIN scratch.cpp LIBRARIES mksolidlib)
-
-add_mfem_miniapp(impsphere
-    MAIN impsphere.cpp
-    ${MFEM_MINIAPPS_COMMON_HEADERS}
-    LIBRARIES mksolidlib)
-
-add_mfem_miniapp(mcsphere
-    MAIN mcsphere.cpp
-    ${MFEM_MINIAPPS_COMMON_HEADERS}
-    LIBRARIES mksolidlib)
-
-add_mfem_miniapp(triwedge
-    MAIN triwedge.cpp
-    ${MFEM_MINIAPPS_COMMON_HEADERS}
-    LIBRARIES mksolidlib pmplib)
 
 add_mfem_miniapp(surfmesh
     MAIN surfmesh.cpp
