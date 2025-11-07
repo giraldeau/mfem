@@ -14,9 +14,9 @@ using namespace std;
 typedef Eigen::AlignedBox<double, 3> AABB;
 
 void ComputeMeshAABB(const Mesh &mesh, AABB &aabb) {
-    for (int i = 0; i < mesh.GetNV(); i++) {
-        aabb.extend(Eigen::Vector3d(mesh.GetVertex(i)));
-    }
+  for (int i = 0; i < mesh.GetNV(); i++) {
+    aabb.extend(Eigen::Vector3d(mesh.GetVertex(i)));
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -29,6 +29,7 @@ int main(int argc, char *argv[]) {
   OptionsParser args(argc, argv);
   args.AddOption(&mesh_name, "-m", "--mesh", "Input mesh (surface in 3D)");
   args.AddOption(&refinement, "-r", "--refinements", "Number of uniform refinements");
+  args.AddOption(&simplex, "-s", "--simplex", "Output grid as simplexes");
   args.AddOption(&outname, "-o", "--output", "Output file basename");
 
   args.Parse();
@@ -40,6 +41,9 @@ int main(int argc, char *argv[]) {
 
   Mesh surf(mesh_name);
 
+  // Refine the surface mesh. This is useful only for curved meshes. If we subdivide triangles,
+  // the subdivided triangles lies in the original triangle plane, therefore it has no effect
+  // on the level-set definition.
   if (refinement > 0) {
     for (int i = 0; i < refinement; i++) {
       surf.UniformRefinement();
@@ -63,10 +67,12 @@ int main(int argc, char *argv[]) {
   tmd.construct(surf);
 
   // Create a mesh to evaluate the distance field
-  // FIXME: uniform grid is not scalable. Implement AMR
-  Eigen::Vector3d box = 2.0 * surf_aabb.sizes();
-  Mesh mesh(Mesh::MakeCartesian3D(20, 20, 20, Element::QUADRILATERAL, box.x(),
-                                  box.y(), box.z()));
+  double margin = surf_aabb.diagonal().norm() * 0.25;
+  surf_aabb.min().array() -= margin;
+  surf_aabb.max().array() += margin;
+  Eigen::Vector3d box = surf_aabb.sizes();
+  Mesh mesh(Mesh::MakeCartesian3D(1, 1, 1, Element::QUADRILATERAL,
+                                  box.x(), box.y(), box.z()));
 
   // Align both meshes
   {
@@ -81,22 +87,24 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  int order = 2;
+  if (simplex == 1) {
+    mesh = Mesh::MakeSimplicial(mesh);
+    mesh.Finalize(true);
+  }
+
+  int order = 1;
   H1_FECollection fec(order, 3);
-
   FiniteElementSpace h1_fespace(&mesh, &fec);
-  FiniteElementSpace h1_fespace_vdim3(&mesh, &fec, mesh.SpaceDimension());
-
   GridFunction dist(&h1_fespace);
-  GridFunction dist_grad(&h1_fespace_vdim3);
+  GridFunction sigmoid(&h1_fespace);
 
   std::cout << "NDofs: " << h1_fespace.GetNDofs() << std::endl;
 
-  double thick = 0.5;
+  double thick = 1.0;
   double half_thick = thick * 0.5;
   FunctionCoefficient tmd_fc([&](const Vector &coord) {
-    // FIXME: use the feature and barycentric coordinate to determine the actual
-    // thickness
+    // FIXME: use the feature and barycentric coordinate
+    // to determine the actual thickness
     auto res = tmd.signed_distance(coord);
 
     // simple distance to level-set
@@ -106,32 +114,70 @@ int main(int argc, char *argv[]) {
     return std::abs(res.distance) - half_thick;
   });
 
+  FunctionCoefficient tmd_fc_sigmoid([&](const Vector &coord) {
+    // FIXME: use the feature and barycentric coordinate to determine the actual
+    // thickness
+    auto res = tmd.signed_distance(coord);
+
+    // simple distance to level-set
+    //return res.distance;
+
+    // constant mid-plane thickness
+    real_t v1 = std::abs(res.distance) - half_thick;
+    real_t v2 = (cosh(10*v1));
+    real_t v3 = 1.0 / (v2*v2);
+    return v3;
+  });
+
+  // Initial state
   dist.ProjectCoefficient(tmd_fc);
+  sigmoid.ProjectCoefficient(tmd_fc_sigmoid);
 
-  // Gradient of the distance function
-  GradientGridFunctionCoefficient dist_grad_coeff(&dist);
-  dist_grad.ProjectCoefficient(dist_grad_coeff);
+  // Refinement step: detect elements that contains the sigmoid of the level-set
+  LpErrorEstimator estimator(2, tmd_fc_sigmoid, sigmoid);
+  ThresholdRefiner refiner(estimator);
+  refiner.SetMaxElements(200000);
 
+  // Prepare ParaView Data Collection
+  ParaViewDataCollection dc("Solid", &mesh);
+  dc.SetPrefixPath("ParaView");
+  dc.SetDataFormat(VTKFormat::BINARY);
+  dc.RegisterField("dist", &dist);
+  dc.RegisterField("sigmoid", &sigmoid);
+
+  // Also save the surface mesh to VTK to superimpose to the domain
   {
-    // Paraview
     std::ofstream out("surf.vtk");
     surf.PrintVTK(out);
+  }
 
-    ParaViewDataCollection dc("Solid", &mesh);
-    dc.SetPrefixPath("ParaView");
-    dc.SetLevelsOfDetail(order);
-    dc.SetHighOrderOutput(true);
-    dc.SetDataFormat(VTKFormat::BINARY);
-    dc.RegisterField("dist", &dist);
-    dc.RegisterField("dist_grad", &dist_grad);
+  // AMR Loop
+  for (int it = 0; ; it++) {
+    dc.SetTime(it);
+    dc.SetCycle(it);
     dc.Save();
+
+    int cdofs = h1_fespace.GetTrueVSize();
+    cout << "AMR iteration " << it << " ndofs: " << cdofs << endl;
+
+    refiner.Apply(mesh);
+    if (refiner.Stop()) {
+      cout << "Stopping criterion satisfied. Stop." << endl;
+      break;
+    }
+
+    h1_fespace.Update();
+    sigmoid.Update();
+    dist.Update();
+
+    dist.ProjectCoefficient(tmd_fc);
+    sigmoid.ProjectCoefficient(tmd_fc_sigmoid);
   }
 
   {
     // glvis
     mesh.Save("mksolid.mesh");
     dist.Save("mksolid-dist.gf");
-    dist_grad.Save("mksolid-dist_grad.gf");
   }
 
   return 0;
