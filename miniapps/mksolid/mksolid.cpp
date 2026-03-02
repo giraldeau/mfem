@@ -24,13 +24,19 @@ int main(int argc, char *argv[]) {
   int refinement = 0;
   std::string outname = "solid";
   std::string mesh_name;
+  std::string thick_file = "";
   int simplex = 0;
+  double thick = 1.0;
+  double offset = 0.0;
 
   OptionsParser args(argc, argv);
   args.AddOption(&mesh_name, "-m", "--mesh", "Input mesh (surface in 3D)");
   args.AddOption(&refinement, "-r", "--refinements", "Number of uniform refinements");
   args.AddOption(&simplex, "-s", "--simplex", "Output grid as simplexes");
   args.AddOption(&outname, "-o", "--output", "Output file basename");
+  args.AddOption(&offset, "-of", "--offset", "Offset");
+  args.AddOption(&thick, "-t", "--thickness", "Thickness constant");
+  args.AddOption(&thick_file, "-tf", "--thickness-file", "Thickness file");
 
   args.Parse();
   if (!args.Good()) {
@@ -40,6 +46,16 @@ int main(int argc, char *argv[]) {
   args.PrintOptions(std::cout);
 
   Mesh surf(mesh_name);
+  std::vector<double> nod_thick(surf.GetNV(), thick);
+  if (!thick_file.empty())
+  {
+    int id;
+    std::ifstream in(thick_file);
+    for (int i = 0; i < surf.GetNV(); i++)
+    {
+      in >> id >> nod_thick[i];
+    }
+  }
 
   // Refine the surface mesh. This is useful only for curved meshes. If we subdivide triangles,
   // the subdivided triangles lies in the original triangle plane, therefore it has no effect
@@ -67,11 +83,11 @@ int main(int argc, char *argv[]) {
   tmd.construct(surf);
 
   // Create a mesh to evaluate the distance field
-  double margin = surf_aabb.diagonal().norm() * 0.25;
+  double margin = surf_aabb.diagonal().norm() * 0.5;
   surf_aabb.min().array() -= margin;
   surf_aabb.max().array() += margin;
   Eigen::Vector3d box = surf_aabb.sizes();
-  Mesh mesh(Mesh::MakeCartesian3D(1, 1, 1, Element::QUADRILATERAL,
+  Mesh mesh(Mesh::MakeCartesian3D(10, 10, 10, Element::QUADRILATERAL,
                                   box.x(), box.y(), box.z()));
 
   // Align both meshes
@@ -100,30 +116,36 @@ int main(int argc, char *argv[]) {
 
   std::cout << "NDofs: " << h1_fespace.GetNDofs() << std::endl;
 
-  double thick = 1.0;
-  double half_thick = thick * 0.5;
-  FunctionCoefficient tmd_fc([&](const Vector &coord) {
-    // FIXME: use the feature and barycentric coordinate
-    // to determine the actual thickness
+  auto thick_fn = [&](const Vector &coord) -> double
+  {
     auto res = tmd.signed_distance(coord);
 
-    // simple distance to level-set
-    //return res.distance;
+    const Element *el = surf.GetElement(res.triangle_id);
+    const int *nodes = el->GetVertices();
 
-    // constant mid-plane thickness
-    return std::abs(res.distance) - half_thick;
+    // Linear interpolation using barycentric coordinates of the closest point
+    double thick_val = res.barycentric.v[0] * nod_thick[nodes[0]] +
+            res.barycentric.v[1] * nod_thick[nodes[1]] +
+            res.barycentric.v[2] * nod_thick[nodes[2]];
+
+    double distance = std::abs(res.distance + offset * 0.5 * thick_val) - (0.5 * thick_val);
+    if (false)
+    {
+      std::printf("uvw      : %f %f %f\n", res.barycentric.v[0], res.barycentric.v[1], res.barycentric.v[2]);
+      std::printf("nodes    : %d %d %d\n", nodes[0], nodes[1], nodes[2]);
+      std::printf("nod_thick: %f %f %f\n", nod_thick[nodes[0]], nod_thick[nodes[1]], nod_thick[nodes[2]]);
+      std::printf("distance : %f\n", res.distance);
+      std::printf("distance2: %f\n", distance);
+    }
+    return distance;
+  };
+
+  FunctionCoefficient tmd_fc([&](const Vector &coord) {
+    return thick_fn(coord);
   });
 
   FunctionCoefficient tmd_fc_sigmoid([&](const Vector &coord) {
-    // FIXME: use the feature and barycentric coordinate to determine the actual
-    // thickness
-    auto res = tmd.signed_distance(coord);
-
-    // simple distance to level-set
-    //return res.distance;
-
-    // constant mid-plane thickness
-    real_t v1 = std::abs(res.distance) - half_thick;
+    real_t v1 = thick_fn(coord);
     real_t v2 = (cosh(10*v1));
     real_t v3 = 1.0 / (v2*v2);
     return v3;
@@ -147,12 +169,12 @@ int main(int argc, char *argv[]) {
 
   // Also save the surface mesh to VTK to superimpose to the domain
   {
-    std::ofstream out("surf.vtk");
+    std::ofstream out("surf.vtu");
     surf.PrintVTK(out);
   }
 
   // AMR Loop
-  for (int it = 0; ; it++) {
+  for (int it = 0; it < 20; it++) {
     dc.SetTime(it);
     dc.SetCycle(it);
     dc.Save();
@@ -178,6 +200,11 @@ int main(int argc, char *argv[]) {
     // glvis
     mesh.Save("mksolid.mesh");
     dist.Save("mksolid-dist.gf");
+  }
+
+  {
+    std::ofstream out("mksolid.vtu");
+    surf.PrintVTK(out);
   }
 
   return 0;
